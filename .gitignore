@@ -1,0 +1,38 @@
+# 凭证 / 私钥（绝对不进仓库）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+
+# 笔记 vault（个人内容）
+vault/
+**/Daily/
+**/Inbox/
+**/Trending/
+**/Weekly/
+
+# 运行时数据
+.bot_start_date
+.pushed_today.json
+.pushed.sqlite3
+.pushed.sqlite3-journal
+logs/
+*.log
+nohup.out
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# IDE / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,15 @@
+[Unit]
+Description=Obsidian TG Bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/obsidian-bot
+ExecStart=/opt/obsidian-bot/venv/bin/python /opt/obsidian-bot/bot.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/opt/obsidian-bot/logs/bot.log
+StandardError=append:/opt/obsidian-bot/logs/bot.log
+
+[Install]
+WantedBy=multi-user.target
