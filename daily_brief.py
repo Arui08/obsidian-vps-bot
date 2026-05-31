@@ -165,41 +165,53 @@ def _hn_url(h: dict) -> str:
 
 
 def fetch_ai_list(n: int = 6) -> list:
-    """AI 领域：仅取近期、有外链的 HN 故事帖"""
-    try:
-        r = requests.get(
-            "https://hn.algolia.com/api/v1/search_by_date",
-            params={
-                "tags": "story",
-                "query": "AI OR LLM OR GPT OR Claude OR Gemini OR Anthropic OR OpenAI",
-                "numericFilters": "points>50",
-                "hitsPerPage": 50,
-            },
-            timeout=20, headers=UA,
-        )
-        r.raise_for_status()
-        hits = r.json().get("hits", [])
-        def good(h):
-            u = (h.get("url") or "").strip()
-            if not u:
-                return False
-            bad = ["news.ycombinator.com/vote", "news.ycombinator.com/login",
-                   "news.ycombinator.com/item"]
-            return not any(b in u for b in bad)
-        hits = [h for h in hits if good(h)]
-        hits.sort(key=lambda h: h.get("points", 0), reverse=True)
-        out = []
-        for h in hits[:n * 3]:
-            out.append({
-                "domain": "ai",
-                "title": h.get("title", ""),
-                "url": h.get("url"),
-                "extra": f"HackerNews {h.get('points',0)}赞 / {h.get('num_comments',0)}评",
-            })
-        return out
-    except Exception as e:
-        print(f"fetch_ai_list 失败: {e}")
-        return []
+    """AI 领域：用多个关键词分别按时间倒序查 + 取并集（HN Algolia 的 OR 不可靠）"""
+    keywords = ["AI", "LLM", "GPT", "Claude", "Gemini", "Anthropic", "OpenAI", "agent"]
+    candidates = []
+    for kw in keywords:
+        try:
+            r = requests.get(
+                "https://hn.algolia.com/api/v1/search_by_date",
+                params={
+                    "tags": "story",
+                    "query": kw,
+                    "numericFilters": "points>30",
+                    "hitsPerPage": 15,
+                },
+                timeout=15, headers=UA,
+            )
+            r.raise_for_status()
+            candidates.extend(r.json().get("hits", []))
+        except Exception as e:
+            print(f"fetch_ai_list kw={kw} 失败: {e}")
+    # 去重（按 objectID）
+    seen = set()
+    uniq = []
+    for h in candidates:
+        oid = h.get("objectID")
+        if oid in seen:
+            continue
+        seen.add(oid)
+        uniq.append(h)
+
+    def good(h):
+        u = (h.get("url") or "").strip()
+        if not u:
+            return False
+        bad = ["news.ycombinator.com/vote", "news.ycombinator.com/login",
+               "news.ycombinator.com/item"]
+        return not any(b in u for b in bad)
+    uniq = [h for h in uniq if good(h)]
+    uniq.sort(key=lambda h: h.get("points", 0), reverse=True)
+    out = []
+    for h in uniq[:max(n * 4, 30)]:
+        out.append({
+            "domain": "ai",
+            "title": h.get("title", ""),
+            "url": h.get("url"),
+            "extra": f"HackerNews {h.get('points',0)}赞 / {h.get('num_comments',0)}评",
+        })
+    return out
 
 
 def fetch_crypto_list(n: int = 6) -> list:
@@ -221,7 +233,7 @@ def fetch_crypto_list(n: int = 6) -> list:
         if not filtered:
             filtered = coins[:10]
         out = []
-        for c in filtered[:n * 3]:
+        for c in filtered[:max(n * 3, 30)]:
             sym = (c.get("symbol") or "").upper()
             name = c.get("name", "")
             price = c.get("current_price", 0)
@@ -285,7 +297,7 @@ def fetch_tech_buzz_list(n: int = 6) -> list:
     except Exception as e:
         print(f"Reddit 失败: {e}")
     candidates.sort(key=lambda x: x.get("_cmt", 0), reverse=True)
-    return candidates[:n * 3]
+    return candidates[:max(n * 3, 30)]
 
 
 def _is_product_url(u: str) -> bool:
@@ -348,7 +360,7 @@ def fetch_tools_list(n: int = 6) -> list:
         hits = [h for h in hits if good(h)]
         hits.sort(key=lambda h: h.get("points", 0), reverse=True)
         out = []
-        for h in hits[:n * 3]:
+        for h in hits[:max(n * 3, 30)]:
             title = re.sub(r"^Show HN:\s*", "", h.get("title", ""))
             u = h.get("url")
             out.append({
@@ -473,12 +485,29 @@ def run_slot(slot: str):
         counts = {domains[0]: 1, domains[1]: 1}
 
     items = []
+    short_by = {}  # 记录每个领域少抓了几条
     for d in domains:
         n = counts.get(d, 0)
         if n <= 0:
             continue
         picked = pick_items(d, n)
         items.extend(picked)
+        if len(picked) < n:
+            short_by[d] = n - len(picked)
+
+    # 兜底：某个领域候选不足，从兄弟领域多抓
+    if short_by:
+        for short_d, missing in short_by.items():
+            others = [d for d in domains if d != short_d]
+            for od in others:
+                extra_picked = pick_items(od, missing)
+                # 排除已经在 items 里的
+                existing_urls = {it.get("url") for it in items}
+                extra_picked = [e for e in extra_picked if e.get("url") not in existing_urls]
+                items.extend(extra_picked[:missing])
+                missing -= len(extra_picked[:missing])
+                if missing <= 0:
+                    break
 
     if not items:
         tg_send(f"⚠️ {today_str()} {SLOT_LABEL[slot]}：所有领域都没新内容（已推完）")
