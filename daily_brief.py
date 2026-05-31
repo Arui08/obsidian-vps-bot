@@ -526,13 +526,11 @@ def run_slot(slot: str):
         tg_send(f"⚠️ {today_str()} {SLOT_LABEL[slot]}：生成全失败")
         return "生成失败"
 
-    # ---- 先尝试同步币安广场（黄金时段 noon / night 的 crypto） ----
+    # ---- 同步币安广场（所有时段、所有领域） ----
     binance_results = []
     binance_failed_items = set()
-    if slot in ("noon", "night") and bnb_publish is not None:
+    if bnb_publish is not None:
         for it, tw in tweets:
-            if it["domain"] != "crypto":
-                continue
             try:
                 res = bnb_publish(tw)
                 binance_results.append((it, res))
