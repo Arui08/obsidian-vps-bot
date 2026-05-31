@@ -543,7 +543,7 @@ def run_slot(slot: str):
 
     bnb_ok_ids = {id(it) for it, _ in binance_results}
 
-    # ---- TG 推送：已发币安的只推成功通知，其他推完整代码块（用于复制到 X） ----
+    # ---- TG 推送：每条都发完整代码块（用于复制到 X），币安成功的额外追加一条通知 ----
     header = (
         f"📰 {today_str()} {SLOT_LABEL[slot]}（D{days_online()} · 阶段{cfg['stage']}）\n"
         f"本档 {len(tweets)} 条\n"
@@ -552,13 +552,12 @@ def run_slot(slot: str):
 
     for it, tw in tweets:
         domain_tag = DOMAIN_HEADERS.get(it["domain"], "")
+        safe_tw = tw.replace("```", "'''")
+        tg_send(f"{domain_tag}\n```\n{safe_tw}\n```", parse_mode="Markdown")
         if id(it) in bnb_ok_ids:
             res = next(r for i, r in binance_results if id(i) == id(it))
             link = res.get("shareLink") or f"id={res.get('id')}"
-            tg_send(f"🪙 已发币安广场 · {domain_tag} {it['title'][:40]}\n{link}")
-        else:
-            safe_tw = tw.replace("```", "'''")
-            tg_send(f"{domain_tag}\n```\n{safe_tw}\n```", parse_mode="Markdown")
+            tg_send(f"✅ 已发币安广场 · {it['title'][:40]}\n{link}")
 
     # ---- 写 vault（追加到当天文件）----
     bnb_map = {id(it): res for it, res in binance_results}
