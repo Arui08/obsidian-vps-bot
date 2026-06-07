@@ -27,12 +27,6 @@ from common import (
     write_note, safe_filename, today_str, now_str, now_cn,
     tg_send,
 )
-try:
-    from binance_square import publish_text as bnb_publish, SquareError
-except Exception as _e:
-    bnb_publish = None
-    SquareError = Exception
-    print(f"binance_square 模块不可用: {_e}")
 
 
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
@@ -526,24 +520,7 @@ def run_slot(slot: str):
         tg_send(f"⚠️ {today_str()} {SLOT_LABEL[slot]}：生成全失败")
         return "生成失败"
 
-    # ---- 同步币安广场（所有时段、所有领域） ----
-    binance_results = []
-    binance_failed_items = set()
-    if bnb_publish is not None:
-        for it, tw in tweets:
-            try:
-                res = bnb_publish(tw)
-                binance_results.append((it, res))
-            except SquareError as e:
-                binance_failed_items.add(id(it))
-                tg_send(f"⚠️ 币安广场发帖失败：{it.get('title','')[:40]}\n{e}")
-            except Exception as e:
-                binance_failed_items.add(id(it))
-                tg_send(f"⚠️ 币安广场异常：{e}")
-
-    bnb_ok_ids = {id(it) for it, _ in binance_results}
-
-    # ---- TG 推送：每条都发完整代码块（用于复制到 X），币安成功的额外追加一条通知 ----
+    # ---- TG 推送：每条都发完整代码块（用于复制到 X）----
     header = (
         f"📰 {today_str()} {SLOT_LABEL[slot]}（D{days_online()} · 阶段{cfg['stage']}）\n"
         f"本档 {len(tweets)} 条\n"
@@ -554,24 +531,14 @@ def run_slot(slot: str):
         domain_tag = DOMAIN_HEADERS.get(it["domain"], "")
         safe_tw = tw.replace("```", "'''")
         tg_send(f"{domain_tag}\n```\n{safe_tw}\n```", parse_mode="Markdown")
-        if id(it) in bnb_ok_ids:
-            res = next(r for i, r in binance_results if id(i) == id(it))
-            link = res.get("shareLink") or f"id={res.get('id')}"
-            tg_send(f"✅ 已发币安广场 · {it['title'][:40]}\n{link}")
 
     # ---- 写 vault（追加到当天文件）----
-    bnb_map = {id(it): res for it, res in binance_results}
     body_parts = []
     for it, tw in tweets:
         domain_tag = DOMAIN_HEADERS.get(it["domain"], "")
-        bnb_line = ""
-        if id(it) in bnb_map:
-            res = bnb_map[id(it)]
-            link = res.get("shareLink") or f"id={res.get('id')}"
-            bnb_line = f"\n> 🪙 币安广场: {link}"
         body_parts.append(
             f"### {domain_tag} {it['title']}\n\n"
-            f"> {it.get('extra','')}\n> 🔗 {it['url']}{bnb_line}\n\n"
+            f"> {it.get('extra','')}\n> 🔗 {it['url']}\n\n"
             f"```\n{tw}\n```\n"
         )
     section = (
