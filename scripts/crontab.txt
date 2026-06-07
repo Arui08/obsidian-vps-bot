@@ -1,18 +1,15 @@
-# 注释行（# 开头）会被 cron 直接接受。换行符为 LF，VPS 用 root 时直接 `crontab crontab.txt` 即可。
-# 时区按服务器系统时区，建议把 VPS 设为 Asia/Shanghai：
-#   sudo timedatectl set-timezone Asia/Shanghai
-#
-# daily_brief.py 4 档：早 / 午 / 晚高峰 / 睡前。timeout 300 防卡死。
+# daily_brief.py：TG / X 内容流（AI、Web3、科技热议、实用工具）
 30 8  * * * cd /opt/obsidian-bot && timeout 300 ./venv/bin/python daily_brief.py morning >> /opt/obsidian-bot/logs/daily_brief.log 2>&1
 30 12 * * * cd /opt/obsidian-bot && timeout 300 ./venv/bin/python daily_brief.py noon    >> /opt/obsidian-bot/logs/daily_brief.log 2>&1
 30 19 * * * cd /opt/obsidian-bot && timeout 300 ./venv/bin/python daily_brief.py evening >> /opt/obsidian-bot/logs/daily_brief.log 2>&1
 0  21 * * * cd /opt/obsidian-bot && timeout 300 ./venv/bin/python daily_brief.py night   >> /opt/obsidian-bot/logs/daily_brief.log 2>&1
 
+# binance_brief.py：币安广场专用内容流（BTC/ETH走势、涨幅榜、热门盘面）
+# 错开 5 分钟，避免和 daily_brief 同时抢 AI 接口。
+35 8  * * * cd /opt/obsidian-bot && timeout 300 ./venv/bin/python binance_brief.py morning >> /opt/obsidian-bot/logs/binance_brief.log 2>&1
+35 12 * * * cd /opt/obsidian-bot && timeout 300 ./venv/bin/python binance_brief.py noon    >> /opt/obsidian-bot/logs/binance_brief.log 2>&1
+35 19 * * * cd /opt/obsidian-bot && timeout 300 ./venv/bin/python binance_brief.py evening >> /opt/obsidian-bot/logs/binance_brief.log 2>&1
+5  21 * * * cd /opt/obsidian-bot && timeout 300 ./venv/bin/python binance_brief.py night   >> /opt/obsidian-bot/logs/binance_brief.log 2>&1
+
 # 每小时进程健康检查，bot 挂了自动 systemctl restart
 0  *  * * * /opt/obsidian-bot/scripts/healthcheck.sh
-
-# 可选：每天早上 6:00 跑 GitHub Trending
-# 0  6  * * * cd /opt/obsidian-bot && timeout 300 ./venv/bin/python trending.py >> /opt/obsidian-bot/logs/trending.log 2>&1
-
-# 可选：每周日晚 22:00 生成本周复盘
-# 0  22 * * 0 cd /opt/obsidian-bot && timeout 300 ./venv/bin/python weekly.py >> /opt/obsidian-bot/logs/weekly.log 2>&1
