@@ -21,6 +21,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 import requests
+from bs4 import BeautifulSoup
 
 from common import (
     MODEL_FAST, ai_chat, git_pull, git_commit_push,
@@ -158,54 +159,95 @@ def _hn_url(h: dict) -> str:
     return f"https://news.ycombinator.com/item?id={h.get('objectID')}"
 
 
+def _fetch_rss_items(feed_url: str, source: str, limit: int = 20) -> list:
+    """轻量 RSS/Atom 解析，不额外引入 feedparser。"""
+    try:
+        r = requests.get(feed_url, headers=UA, timeout=20)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "xml")
+        nodes = soup.find_all("item") or soup.find_all("entry")
+        out = []
+        for node in nodes[:limit]:
+            title_el = node.find("title")
+            title = title_el.get_text(strip=True) if title_el else ""
+            link = ""
+            link_el = node.find("link")
+            if link_el:
+                link = link_el.get_text(strip=True) or link_el.get("href", "")
+            guid_el = node.find("guid")
+            if not link and guid_el:
+                link = guid_el.get_text(strip=True)
+            if title and link:
+                out.append({"title": title, "url": link, "source": source})
+        return out
+    except Exception as e:
+        print(f"RSS 抓取失败 {source}: {e}")
+        return []
+
+
 def fetch_ai_list(n: int = 6) -> list:
-    """AI 领域：用多个关键词分别按时间倒序查 + 取并集（HN Algolia 的 OR 不可靠）"""
+    """AI 领域：优先中文 AI 源（量子位/机器之心），HN 英文源只做兜底。"""
+    out = []
+    feeds = [
+        ("https://www.qbitai.com/feed", "量子位"),
+        ("https://www.jiqizhixin.com/rss", "机器之心"),
+    ]
+    seen = set()
+    for url, source in feeds:
+        for it in _fetch_rss_items(url, source, limit=20):
+            key = it["url"] or it["title"]
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "domain": "ai",
+                "title": it["title"],
+                "url": it["url"],
+                "extra": f"中文AI源：{source}",
+                "source_lang": "zh",
+            })
+    if len(out) >= max(n * 3, 18):
+        return out[:max(n * 4, 30)]
+
+    # 兜底：英文 HN 只当雷达，prompt 会转译成中文语境
     keywords = ["AI", "LLM", "GPT", "Claude", "Gemini", "Anthropic", "OpenAI", "agent"]
     candidates = []
     for kw in keywords:
         try:
             r = requests.get(
                 "https://hn.algolia.com/api/v1/search_by_date",
-                params={
-                    "tags": "story",
-                    "query": kw,
-                    "numericFilters": "points>30",
-                    "hitsPerPage": 15,
-                },
+                params={"tags": "story", "query": kw, "numericFilters": "points>30", "hitsPerPage": 15},
                 timeout=15, headers=UA,
             )
             r.raise_for_status()
             candidates.extend(r.json().get("hits", []))
         except Exception as e:
             print(f"fetch_ai_list kw={kw} 失败: {e}")
-    # 去重（按 objectID）
-    seen = set()
     uniq = []
+    hseen = set()
     for h in candidates:
         oid = h.get("objectID")
-        if oid in seen:
+        if oid in hseen:
             continue
-        seen.add(oid)
-        uniq.append(h)
-
-    def good(h):
+        hseen.add(oid)
         u = (h.get("url") or "").strip()
-        if not u:
-            return False
-        bad = ["news.ycombinator.com/vote", "news.ycombinator.com/login",
-               "news.ycombinator.com/item"]
-        return not any(b in u for b in bad)
-    uniq = [h for h in uniq if good(h)]
+        if not u or any(b in u for b in ["news.ycombinator.com/vote", "news.ycombinator.com/login", "news.ycombinator.com/item"]):
+            continue
+        uniq.append(h)
     uniq.sort(key=lambda h: h.get("points", 0), reverse=True)
-    out = []
     for h in uniq[:max(n * 4, 30)]:
+        key = h.get("url") or h.get("title", "")
+        if key in seen:
+            continue
+        seen.add(key)
         out.append({
             "domain": "ai",
             "title": h.get("title", ""),
             "url": h.get("url"),
-            "extra": f"HackerNews {h.get('points',0)}赞 / {h.get('num_comments',0)}评",
+            "extra": "英文AI雷达：HN（已转译中文语境）",
+            "source_lang": "en",
         })
-    return out
+    return out[:max(n * 4, 30)]
 
 
 def fetch_crypto_list(n: int = 6) -> list:
@@ -252,7 +294,43 @@ def fetch_crypto_list(n: int = 6) -> list:
 
 
 def fetch_tech_buzz_list(n: int = 6) -> list:
+    """科技代梗：优先中文 V2EX 热榜，英文 HN/Reddit 只兜底。"""
     candidates = []
+    seen = set()
+    try:
+        r = requests.get("https://www.v2ex.com/api/topics/hot.json", timeout=20, headers=UA)
+        r.raise_for_status()
+        allowed_nodes = {"程序员", "职场话题", "问与答", "分享创造", "互联网", "iPhone", "Apple", "Google Gemini", "酷工作", "远程工作", "Python", "JavaScript", "Linux"}
+        tech_keywords = "AI 模型 编程 程序员 开发者 代码 工具 软件 开源 GitHub Claude GPT Gemini Kimi DeepSeek iPhone 键盘 Mac Linux 远程 工作 职场"
+        for d in r.json()[:40]:
+            title = d.get("title", "")
+            url = d.get("url", "") or f"https://www.v2ex.com/t/{d.get('id')}"
+            node = (d.get("node") or {}).get("title", "")
+            if node not in allowed_nodes and not any(k.lower() in title.lower() for k in tech_keywords.split()):
+                continue
+            replies = d.get("replies", 0)
+            key = url or title
+            if not title or key in seen:
+                continue
+            seen.add(key)
+            candidates.append({
+                "domain": "tech",
+                "title": title,
+                "url": url,
+                "_pts": replies,
+                "_cmt": replies,
+                "extra": f"中文技术社区：V2EX · {node}",
+                "source_lang": "zh",
+            })
+    except Exception as e:
+        print(f"V2EX hot 失败: {e}")
+
+    # 中文源够用时直接返回，避免英文 HN 把 V2EX 挤下去
+    if len(candidates) >= 5:
+        candidates.sort(key=lambda x: x.get("_cmt", 0), reverse=True)
+        return candidates[:max(n * 3, 30)]
+
+    # 兜底：HN front_page
     try:
         r = requests.get(
             "https://hn.algolia.com/api/v1/search",
@@ -261,35 +339,23 @@ def fetch_tech_buzz_list(n: int = 6) -> list:
         )
         r.raise_for_status()
         for h in r.json().get("hits", []):
+            title = h.get("title", "")
+            url = _hn_url(h)
+            key = url or title
+            if not title or key in seen:
+                continue
+            seen.add(key)
             candidates.append({
                 "domain": "tech",
-                "title": h.get("title", ""),
-                "url": _hn_url(h),
+                "title": title,
+                "url": url,
                 "_pts": h.get("points", 0),
                 "_cmt": h.get("num_comments", 0),
-                "extra": f"HN {h.get('points',0)}赞 / {h.get('num_comments',0)}评",
+                "extra": "英文科技雷达：HN（已转译中文语境）",
+                "source_lang": "en",
             })
     except Exception as e:
         print(f"HN front_page 失败: {e}")
-    try:
-        r = requests.get(
-            "https://www.reddit.com/r/programming/hot.json?limit=20",
-            timeout=20,
-            headers={"User-Agent": "obsidian-bot/1.0"},
-        )
-        if r.ok:
-            for c in r.json().get("data", {}).get("children", []):
-                d = c.get("data", {})
-                candidates.append({
-                    "domain": "tech",
-                    "title": d.get("title", ""),
-                    "url": d.get("url_overridden_by_dest") or f"https://reddit.com{d.get('permalink','')}",
-                    "_pts": d.get("score", 0),
-                    "_cmt": d.get("num_comments", 0),
-                    "extra": f"Reddit {d.get('score',0)}赞 / {d.get('num_comments',0)}评",
-                })
-    except Exception as e:
-        print(f"Reddit 失败: {e}")
     candidates.sort(key=lambda x: x.get("_cmt", 0), reverse=True)
     return candidates[:max(n * 3, 30)]
 
@@ -329,15 +395,45 @@ def _link_kind(u: str) -> str:
 
 
 def fetch_tools_list(n: int = 6) -> list:
-    """实用软件：HN Show HN，仅取近期、有外部链接、且是真·产品入口的"""
+    """GitHub/工具：以 GitHub Trending 热门仓库为主，不要求中文。"""
+    out = []
+    try:
+        r = requests.get("https://github.com/trending?since=daily", timeout=30, headers=UA)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "lxml")
+        for article in soup.select("article.Box-row")[:max(n * 3, 30)]:
+            a = article.select_one("h2 a")
+            if not a:
+                continue
+            full_name = a.get_text(strip=True).replace("\n", "").replace(" ", "")
+            desc_el = article.select_one("p")
+            desc = desc_el.get_text(" ", strip=True) if desc_el else ""
+            lang_el = article.select_one('span[itemprop="programmingLanguage"]')
+            lang = lang_el.get_text(strip=True) if lang_el else ""
+            stars_el = article.select_one('a[href$="/stargazers"]')
+            stars = stars_el.get_text(strip=True) if stars_el else "0"
+            today_el = article.select_one("span.d-inline-block.float-sm-right")
+            today_stars = today_el.get_text(" ", strip=True) if today_el else ""
+            url = f"https://github.com/{full_name}"
+            title = f"{full_name} - {desc}" if desc else full_name
+            out.append({
+                "domain": "tools",
+                "title": title,
+                "url": url,
+                "link_kind": "GitHub Trending 热门仓库（可直接 star / clone / 看 README）",
+                "extra": f"GitHub Trending · {lang} · stars {stars} · {today_stars}".strip(),
+                "source_lang": "en",
+            })
+        if out:
+            return out
+    except Exception as e:
+        print(f"GitHub Trending 失败: {e}")
+
+    # 兜底：Show HN 产品入口
     try:
         r = requests.get(
             "https://hn.algolia.com/api/v1/search_by_date",
-            params={
-                "tags": "show_hn",
-                "numericFilters": "points>30",
-                "hitsPerPage": 80,
-            },
+            params={"tags": "show_hn", "numericFilters": "points>30", "hitsPerPage": 80},
             timeout=20, headers=UA,
         )
         r.raise_for_status()
@@ -346,14 +442,12 @@ def fetch_tools_list(n: int = 6) -> list:
             u = (h.get("url") or "").strip()
             if not u:
                 return False
-            bad_substr = ["news.ycombinator.com/vote", "news.ycombinator.com/login",
-                          "news.ycombinator.com/item"]
+            bad_substr = ["news.ycombinator.com/vote", "news.ycombinator.com/login", "news.ycombinator.com/item"]
             if any(b in u for b in bad_substr):
                 return False
             return _is_product_url(u)
         hits = [h for h in hits if good(h)]
         hits.sort(key=lambda h: h.get("points", 0), reverse=True)
-        out = []
         for h in hits[:max(n * 3, 30)]:
             title = re.sub(r"^Show HN:\s*", "", h.get("title", ""))
             u = h.get("url")
@@ -362,7 +456,8 @@ def fetch_tools_list(n: int = 6) -> list:
                 "title": title,
                 "url": u,
                 "link_kind": _link_kind(u),
-                "extra": f"Show HN {h.get('points',0)}赞 / {h.get('num_comments',0)}评",
+                "extra": "英文工具雷达：Show HN（已转译中文使用场景）",
+                "source_lang": "en",
             })
         return out
     except Exception as e:
@@ -511,7 +606,7 @@ def make_brief_tweet(item: dict) -> str:
 
     prompt = f"""你是一个混迹中文 X/Twitter 的内容博主，具体角色：{style['persona']}。风格参考"鸟哥|蓝鸟会"：口语化、有钩子、有真实判断、有一点聊天感，但不要油腻，不要像营销号，不要每条都一个套路。
 
-现在要根据下面这条信息写一条中文推文。信息源只是背景材料，最终要写成一个人的观点、吐槽、故事或判断，不要写成资讯摘要。
+现在要根据下面这条信息写一条中文推文。目标读者是中文互联网用户，不是英文技术圈。信息源只是背景材料，最终要写成一个人的观点、吐槽、故事或判断，不要写成资讯摘要。
 
 本条叙事角度：{angle}
 本条内容形态：{shape_name}
@@ -526,11 +621,12 @@ def make_brief_tweet(item: dict) -> str:
 5. 开头第一句必须从人的感受、痛点、场景、吐槽或判断切入。参考方向：{style['vibes']}。
 6. 严禁以下开头或近似表达："一觉醒来HN又炸了"、"HN上又吵起来了"、"HackerNews刷到"、"Reddit评论区炸了"、"今天看到一个"、"这个项目"、"近期发现"、"分享一个"、"今天给大家推荐"、"为大家介绍"。
 7. 不要写 HN/Reddit 的点赞数、评论数、热度数字，也不要写"评论区炸了"。这些是信息源痕迹，容易暴露AI感。可以使用真正有内容价值的数字：价格、涨幅、版本号、节省比例、stars、token、时间成本等。
-8. 不要直接复述标题。要提炼核心内容：发生了什么、为什么重要、普通人/开发者/交易者该怎么看。
-9. 纯文本，不用 markdown 的 # 标题、不用 ** 加粗、不用 > 引用块、不用任何反引号；技术词直接裸写，比如 fork()+exec()。
-10. 结尾必须有一个真人式互动/行动召唤：比如"这事你怎么看"、"我先 mark 周末试"、"你会接还是等回踩"、"别光听我吹，自己跑一遍"。
-11. 行动召唤之后单独一行附链接：{item['url']}
-12. 最后另起一行，3-4 个相关中文 hashtag（# 开头空格分隔），贴合主题。
+8. 如果素材来自英文，必须转译成中文用户能感受到的场景：打工人、程序员、小老板、自媒体、国内AI工具、微信/抖音/小红书生态、国产大模型、远程办公、职场内卷。不要保留外网搬运腔。
+9. 不要直接复述标题。要提炼核心内容：发生了什么、为什么重要、普通人/开发者/交易者该怎么看。
+10. 纯文本，不用 markdown 的 # 标题、不用 ** 加粗、不用 > 引用块、不用任何反引号；技术词直接裸写，比如 fork()+exec()。
+11. 结尾必须有一个真人式互动/行动召唤：比如"这事你怎么看"、"我先 mark 周末试"、"你会接还是等回踩"、"别光听我吹，自己跑一遍"。
+12. 行动召唤之后单独一行附链接：{item['url']}
+13. 最后另起一行，3-4 个相关中文 hashtag（# 开头空格分隔），贴合主题。
 
 主题领域：{style['label']}
 信息源数据（只用于判断，不要照抄热度数字）：{item.get('extra','')}{link_hint}
