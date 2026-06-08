@@ -254,6 +254,39 @@ def render_data(item: dict) -> str:
     ])
 
 
+def fallback_square_post(slot: str, item: dict) -> str:
+    """AI 返回空内容或发帖接口判空时的本地兜底模板。"""
+    d = item["data"]
+    symbol = item["symbol"]
+    slot_label = SLOT_LABEL.get(slot, slot)
+    if "current" in d:
+        price = _fmt_price(d["current"])
+        pct = _fmt_pct(d["change24"])
+        high = _fmt_price(d["high24"])
+        low = _fmt_price(d["low24"])
+        volume = f"{d['quoteVolume']/1e8:.2f}亿USDT"
+    else:
+        price = _fmt_price(d["lastPrice"])
+        pct = _fmt_pct(d["priceChangePercent"])
+        high = _fmt_price(d["highPrice"])
+        low = _fmt_price(d["lowPrice"])
+        volume = f"{d['quoteVolume']/1e8:.2f}亿USDT"
+
+    return f"""${symbol} 这波盘面有点值得盯一下，不是单纯看涨跌，而是看资金有没有继续接。
+
+现在价格在 {price}，24h涨跌 {pct}，日内高点 {high}，低点 {low}，成交额大概 {volume}。这个位置最怕的是情绪上头直接追，结果刚好追在短线压力附近。
+
+我的看法很简单：如果能在高位附近继续放量站稳，说明资金还没走；如果冲高后量跟不上，就要小心回踩确认。尤其是{slot_label}这个时间段，很多人容易被一根线带节奏。
+
+你觉得 ${symbol} 这里是在蓄势突破，还是短线诱多？
+
+#{symbol} #行情分析 #币圈 #风险控制"""
+
+
+def _clean_content(content: str) -> str:
+    return (content or "").strip()
+
+
 def make_square_post(slot: str, item: dict) -> str:
     data_text = render_data(item)
     prompt = f"""你是币安广场上的中文行情观察博主，风格像老韭菜盘面复盘：说人话，有判断，但不喊单。
@@ -277,7 +310,11 @@ def make_square_post(slot: str, item: dict) -> str:
 {data_text}
 
 直接输出正文。"""
-    return ai_chat(prompt, model=MODEL_FAST, max_tokens=1200).strip()
+    content = _clean_content(ai_chat(prompt, model=MODEL_FAST, max_tokens=1200))
+    if len(content) < 30:
+        print(f"AI生成内容过短 len={len(content)}，使用兜底模板")
+        return fallback_square_post(slot, item)
+    return content
 
 
 # ---------------- 主流程 ----------------
@@ -305,12 +342,26 @@ def run_slot(slot: str) -> str:
         tg_send(msg)
         return msg
 
+    content = _clean_content(content)
+    print(f"准备发币安广场: slot={slot} symbol={item['symbol']} content_len={len(content)}")
+
     try:
         res = publish_text(content)
     except SquareError as e:
-        msg = f"⚠️ 币安广场 {SLOT_LABEL[slot]} 发帖失败：${item['symbol']}\n{e}"
-        tg_send(msg)
-        return msg
+        # 偶发：AI/接口中间返回空内容导致 Binance 判空。用本地模板兜底重试一次。
+        if "Content cannot be empty" in str(e) or len(content) < 30:
+            print(f"发帖被判空，使用兜底模板重试: {e}")
+            content = fallback_square_post(slot, item)
+            try:
+                res = publish_text(content)
+            except Exception as e2:
+                msg = f"⚠️ 币安广场 {SLOT_LABEL[slot]} 兜底重试失败：${item['symbol']}\n{e2}"
+                tg_send(msg)
+                return msg
+        else:
+            msg = f"⚠️ 币安广场 {SLOT_LABEL[slot]} 发帖失败：${item['symbol']}\n{e}"
+            tg_send(msg)
+            return msg
     except Exception as e:
         msg = f"⚠️ 币安广场 {SLOT_LABEL[slot]} 异常：${item['symbol']}\n{e}"
         tg_send(msg)
