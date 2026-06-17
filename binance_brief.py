@@ -31,11 +31,17 @@ STABLES = {"USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USTC", "USD1", "USDE
 MAJORS = {"BTC", "ETH"}
 
 SLOT_LABEL = {
-    "morning": "早盘",
-    "noon": "午盘涨幅榜",
-    "evening": "晚间盘面",
-    "night": "夜盘观察",
+    "pre_market": "开盘前瞻",
+    "morning": "BTC早盘",
+    "mid_morning": "涨幅快报",
+    "noon": "午盘热门币",
+    "afternoon": "合约情绪",
+    "late_noon": "热门盘点",
+    "evening": "ETH晚间",
+    "night": "夜盘复盘",
 }
+
+SLOT_ORDER = ["pre_market", "morning", "mid_morning", "noon", "afternoon", "late_noon", "evening", "night"]
 
 
 # ---------------- 去重 ----------------
@@ -193,6 +199,18 @@ def pick_top_gainer() -> dict:
     return rows[0] if rows else None
 
 
+def pick_early_gainer() -> dict:
+    """早盘快报：涨幅>3% 且成交额>3000万，按涨幅排序，优先未推过的小币。"""
+    rows = [r for r in spot_24h() if r["priceChangePercent"] > 3 and r["quoteVolume"] > 30_000_000]
+    rows.sort(key=lambda r: (r["priceChangePercent"], math.log10(r["quoteVolume"] + 1)), reverse=True)
+    for r in rows:
+        if r["base"] not in MAJORS and not _pushed_recent(r["base"], days=2):
+            return r
+    for r in rows:
+        return r
+    return None
+
+
 def pick_hot_symbol() -> dict:
     rows = [r for r in spot_24h() if r["quoteVolume"] > 100_000_000]
     rows.sort(key=lambda r: (math.log10(r["quoteVolume"] + 1), abs(r["priceChangePercent"])), reverse=True)
@@ -202,19 +220,53 @@ def pick_hot_symbol() -> dict:
     return rows[0] if rows else None
 
 
+def pick_day_recap() -> dict:
+    """当日热门盘点：成交额最大+有明显涨幅的币。"""
+    rows = [r for r in spot_24h() if r["quoteVolume"] > 80_000_000 and abs(r["priceChangePercent"]) > 2]
+    rows.sort(key=lambda r: (math.log10(r["quoteVolume"] + 1), abs(r["priceChangePercent"])), reverse=True)
+    for r in rows:
+        if r["base"] not in MAJORS and not _pushed_recent(r["base"], days=1):
+            return r
+    return rows[0] if rows else None
+
+
 # ---------------- 选题 ----------------
 
 def build_item(slot: str) -> dict:
+    if slot == "pre_market":
+        snap_btc = market_snapshot("BTCUSDT")
+        snap_eth = market_snapshot("ETHUSDT")
+        return {"topic": "pre_market", "symbol": "BTC/ETH",
+                "title": "开盘前瞻", "data": {"btc": snap_btc, "eth": snap_eth}}
+
     if slot == "morning":
         snap = market_snapshot("BTCUSDT")
         return {"topic": "btc_open", "symbol": "BTC", "title": "BTC 早盘走势", "data": snap}
 
+    if slot == "mid_morning":
+        g = pick_early_gainer()
+        if g:
+            return {"topic": "early_gainer", "symbol": g["base"], "title": f"早盘涨幅：{g['base']} +{g['priceChangePercent']:.1f}%", "data": g}
+        snap = market_snapshot("BTCUSDT")
+        return {"topic": "btc_mid", "symbol": "BTC", "title": "BTC 早盘走势", "data": snap}
+
     if slot == "noon":
         g = pick_top_gainer()
         if g:
-            return {"topic": "top_gainer", "symbol": g["base"], "title": f"{g['base']} 涨幅榜", "data": g}
+            return {"topic": "top_gainer", "symbol": g["base"], "title": f"{g['base']} 午盘热门", "data": g}
         snap = market_snapshot("ETHUSDT")
         return {"topic": "eth_noon", "symbol": "ETH", "title": "ETH 午盘走势", "data": snap}
+
+    if slot == "afternoon":
+        snap = market_snapshot("BTCUSDT")
+        return {"topic": "contract_sentiment", "symbol": "BTC", "title": "BTC 合约情绪", "data": snap}
+
+    if slot == "late_noon":
+        h = pick_day_recap()
+        if h:
+            return {"topic": "day_recap", "symbol": h["base"], "title": f"今日热门：{h['base']}", "data": h}
+        snap = market_snapshot("ETHUSDT")
+        return {"topic": "eth_recap", "symbol": "ETH", "title": "ETH 日内复盘", "data": snap}
 
     if slot == "evening":
         snap = market_snapshot("ETHUSDT")
@@ -223,7 +275,7 @@ def build_item(slot: str) -> dict:
     if slot == "night":
         h = pick_hot_symbol()
         if h:
-            return {"topic": "hot_symbol", "symbol": h["base"], "title": f"{h['base']} 热门盘面", "data": h}
+            return {"topic": "hot_symbol", "symbol": h["base"], "title": f"{h['base']} 夜盘复盘", "data": h}
         snap = market_snapshot("BTCUSDT")
         return {"topic": "btc_night", "symbol": "BTC", "title": "BTC 夜盘观察", "data": snap}
 
@@ -232,6 +284,25 @@ def build_item(slot: str) -> dict:
 
 def render_data(item: dict) -> str:
     d = item["data"]
+    # 开盘前瞻：BTC + ETH 双数据
+    if "btc" in d and "eth" in d:
+        lines = ["【BTC】"]
+        b = d["btc"]
+        lines.extend([
+            f"当前价：{_fmt_price(b['current'])}",
+            f"24h涨跌：{_fmt_pct(b['change24'])}",
+            f"24h高点：{_fmt_price(b['high24'])}  低点：{_fmt_price(b['low24'])}",
+            f"成交额：{b['quoteVolume']/1e8:.2f}亿USDT  趋势：{b['trend']}",
+        ])
+        lines.append("【ETH】")
+        e = d["eth"]
+        lines.extend([
+            f"当前价：{_fmt_price(e['current'])}",
+            f"24h涨跌：{_fmt_pct(e['change24'])}",
+            f"24h高点：{_fmt_price(e['high24'])}  低点：{_fmt_price(e['low24'])}",
+            f"成交额：{e['quoteVolume']/1e8:.2f}亿USDT  趋势：{e['trend']}",
+        ])
+        return "\n".join(lines)
     if "current" in d:
         return "\n".join([
             f"币种：${item['symbol']}",
@@ -257,8 +328,22 @@ def render_data(item: dict) -> str:
 def fallback_square_post(slot: str, item: dict) -> str:
     """AI 返回空内容或发帖接口判空时的本地兜底模板。"""
     d = item["data"]
-    symbol = item["symbol"]
     slot_label = SLOT_LABEL.get(slot, slot)
+
+    if "btc" in d and "eth" in d:
+        b, e = d["btc"], d["eth"]
+        return f"""开盘前扫一眼：BTC 在 {_fmt_price(b['current'])}（{_fmt_pct(b['change24'])}），ETH 在 {_fmt_price(e['current'])}（{_fmt_pct(e['change24'])}）。
+
+BTC 24h 高 {_fmt_price(b['high24'])} 低 {_fmt_price(b['low24'])}，趋势 {b['trend']}。
+ETH 24h 高 {_fmt_price(e['high24'])} 低 {_fmt_price(e['low24'])}，趋势 {e['trend']}。
+
+开盘最该盯的不是涨跌，是BTC能不能站稳关键位、ETH有没有跟着动。
+
+今天开盘你们先盯大饼还是先盯山寨？
+
+#BTC #ETH #早盘 #行情前瞻"""
+
+    symbol = item["symbol"]
     if "current" in d:
         price = _fmt_price(d["current"])
         pct = _fmt_pct(d["change24"])
@@ -289,7 +374,101 @@ def _clean_content(content: str) -> str:
 
 def make_square_post(slot: str, item: dict) -> str:
     data_text = render_data(item)
-    prompt = f"""你是币安广场上的中文行情观察博主，风格像老韭菜盘面复盘：说人话，有判断，但不喊单。
+    slot_label = SLOT_LABEL.get(slot, slot)
+
+    # ---- 新时段专用提示词（4个新slot）----
+
+    if slot == "pre_market":
+        prompt = f"""你是一个混币安广场的行情观察号，说话风格像一个盯了几年盘的老韭菜。不装神，不喊单，但敢说自己的判断。
+
+现在开盘前，写一条开盘前瞻帖。
+
+铁律：
+1.只输出正文，不要废话开场。
+2.开头必须是钩子句。用一句话把BTC和ETH的盘前位置讲清楚，比如"大饼现在卡在 xxx，以太稍微强一点，在 xxx 晃"。
+3.正文150-300字就够了。每句话独立成行，句间空一行。用短句，像在群里吹水。
+4.必须有2-3个观点或分析：BTC关键位置在哪、ETH关键位置在哪、开盘后最可能怎么走。
+5.结合具体数据写（价格、涨跌、高低点、成交额、趋势），但数字不要罗列，要融进句子里。
+6.不能写"必涨、稳赚、梭哈、无脑多、无脑空"。
+7.结尾留一个互动问题，让人想回复，比如"今天开盘你们先盯大饼还是先盯山寨？"、"这个位置你觉得能不能站稳？"。
+8.正文末尾放3-4个标签：#BTC #ETH #早盘 #行情前瞻。
+9.不用任何emoji，不用markdown。
+
+主题：开盘前瞻
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    elif slot == "mid_morning":
+        prompt = f"""你是币安广场上一个盯早盘的行情号。说话风格：看到了什么就说什么，有数字有判断，不写官样文章。
+
+现在写一条早盘涨幅快报。
+
+铁律：
+1.只输出正文。
+2.开头必须是钩子，比如"开盘两个小时，今天最先拉的不是大饼，是 $xxx"、"早盘这根线有点意思"。
+3.每句单独成行，句间空一行。全文150-280字，短句为主。
+4.正文必须有：哪个币涨得最猛（具体数据）、为什么可能被资金盯上（1-2句判断）、早盘追进去风险在哪（1句提醒）。
+5.数据融进句子，不要列清单。
+6.不能写"必涨、梭哈、无脑冲"。
+7.结尾用一句话互动："早盘这波你追了吗？"、"这个位置你还敢追吗？"之类。
+8.放3-4个标签：#早盘 #涨幅榜 #{item['symbol']} #行情。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    elif slot == "afternoon":
+        prompt = f"""你是币安广场上聊合约情绪的行情号。说话像老韭菜在复盘：有数据、有观点、不说套话。
+
+现在写一条午后合约情绪帖。
+
+铁律：
+1.只输出正文。
+2.开头钩子：用一句话点出当前的合约氛围——多头亢奋还是空头压着？比如"今天这资金费率，多头有点上头"。
+3.每句单独成行，句间空一行。全文150-280字。
+4.正文要有：BTC当前多空氛围分析（结合趋势、成交额、价格位置）、如果费率偏高提醒一句风险、下午可能怎么走（1-2句判断）。
+5.数字融进句子，不要列清单。
+6.不能写杠杆建议，不能喊单。
+7.结尾互动："下午这行情你是空仓看戏，还是短线搞一波？"之类。
+8.标签：#BTC #合约 #资金费率 #行情。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    elif slot == "late_noon":
+        prompt = f"""你是币安广场上一个做盘后复盘的行情号。风格：实话实说，有观点，不灌水。
+
+现在写一条当日热门币盘点。
+
+铁律：
+1.只输出正文。
+2.开头钩子：一句话讲今天盘面最有记忆点的东西，比如"今天最猛的不是大饼，是 $xxx，一根线拉了 xx%"。
+3.每句单独成行，句间空一行。全文180-320字。
+4.正文要有：今天哪个币最值得讨论（具体涨跌和成交额）、为什么它能走出来（1-2句分析）、这个位置明天怎么看（1句判断+1句风险提醒）。
+5.数字融入叙述，不要堆数据。
+6.不能写"明天必涨"，不能喊单。
+7.结尾互动："这个币明天你还看好吗？"、"今天吃到这波了吗？"之类。
+8.标签：3-4个，含 #{item['symbol']}。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    else:
+        # ---- 原有4个时段提示词（保持不变）----
+        prompt = f"""你是币安广场上的中文行情观察博主，风格像老韭菜盘面复盘：说人话，有判断，但不喊单。
 
 请根据下面币安现货盘面数据，写一条适合币安广场的中文短帖。
 
@@ -304,12 +483,13 @@ def make_square_post(slot: str, item: dict) -> str:
 8. 结尾留互动问题，比如"这个位置你会接，还是等回踩？"、"你觉得这是突破前洗盘，还是诱多？"。
 9. 语气要像币圈老哥聊天：有盘感，有风险提醒，别像新闻稿。
 
-时段：{SLOT_LABEL.get(slot, slot)}
+时段：{slot_label}
 主题：{item['title']}
 数据：
 {data_text}
 
 直接输出正文。"""
+
     content = _clean_content(ai_chat(prompt, model=MODEL_FAST, max_tokens=1200))
     if len(content) < 30:
         print(f"AI生成内容过短 len={len(content)}，使用兜底模板")
@@ -411,6 +591,9 @@ tags: [binance-square, crypto]
 
 def main():
     slot = sys.argv[1] if len(sys.argv) > 1 else "morning"
+    if slot not in SLOT_LABEL:
+        print(f"未知 slot: {slot}，可用: {list(SLOT_LABEL.keys())}")
+        return
     print(run_slot(slot))
 
 
