@@ -5,6 +5,7 @@
 - 使用 Binance Vision 公开数据域 data-api.binance.vision 的现货行情，稳定免鉴权。
 - TG 只发成功/失败通知，不推正文。
 """
+import hashlib
 import json
 import math
 import sqlite3
@@ -230,6 +231,37 @@ def pick_day_recap() -> dict:
     return rows[0] if rows else None
 
 
+def pick_big_mover() -> dict:
+    """找一个7天内剧烈波动的币，用于行情故事：涨幅或跌幅>15%、成交额>5000万。"""
+    rows = [r for r in spot_24h() if abs(r["priceChangePercent"]) > 5 and r["quoteVolume"] > 50_000_000]
+    if len(rows) < 3:
+        rows = [r for r in spot_24h() if r["quoteVolume"] > 80_000_000]
+    rows.sort(key=lambda r: (abs(r["priceChangePercent"]), math.log10(r["quoteVolume"] + 1)), reverse=True)
+    for r in rows:
+        if r["base"] not in MAJORS and not _pushed_recent(r["base"], days=4):
+            return r
+    return rows[0] if rows else None
+
+
+def pick_debate_coin() -> dict:
+    """找一个有争议话题性的币：最近推过+成交额仍活跃+涨跌明显。"""
+    rows = [r for r in spot_24h() if r["quoteVolume"] > 200_000_000]
+    rows.sort(key=lambda r: abs(r["priceChangePercent"]), reverse=True)
+    if not rows:
+        rows = sorted(spot_24h(), key=lambda r: r["quoteVolume"], reverse=True)[:10]
+    for r in rows:
+        if r["base"] not in MAJORS and not _pushed_recent(r["base"], days=1):
+            return r
+    return rows[0] if rows else rows[0]
+
+
+def _content_mode(slot: str) -> str:
+    """根据日期+时段决定今天用原始行情还是新内容类型。保证每天同一时段走同一种模式。"""
+    seed = f"{today_str()}|{slot}"
+    idx = int(hashlib.md5(seed.encode("utf-8")).hexdigest(), 16) % 2
+    return "original" if idx == 0 else "alt"
+
+
 # ---------------- 选题 ----------------
 
 def build_item(slot: str) -> dict:
@@ -244,9 +276,18 @@ def build_item(slot: str) -> dict:
         return {"topic": "btc_open", "symbol": "BTC", "title": "BTC 早盘走势", "data": snap}
 
     if slot == "mid_morning":
+        mode = _content_mode("mid_morning")
+        if mode == "alt":
+            g = pick_big_mover()
+            if g:
+                sym = g["base"]
+                return {"topic": "coin_story", "symbol": sym,
+                        "title": f"复盘${sym}这波行情", "data": g, "content_mode": "story"}
+        # fallback to original
         g = pick_early_gainer()
         if g:
-            return {"topic": "early_gainer", "symbol": g["base"], "title": f"早盘涨幅：{g['base']} +{g['priceChangePercent']:.1f}%", "data": g}
+            return {"topic": "early_gainer", "symbol": g["base"],
+                    "title": f"早盘涨幅：{g['base']} +{g['priceChangePercent']:.1f}%", "data": g}
         snap = market_snapshot("BTCUSDT")
         return {"topic": "btc_mid", "symbol": "BTC", "title": "BTC 早盘走势", "data": snap}
 
@@ -258,10 +299,25 @@ def build_item(slot: str) -> dict:
         return {"topic": "eth_noon", "symbol": "ETH", "title": "ETH 午盘走势", "data": snap}
 
     if slot == "afternoon":
+        mode = _content_mode("afternoon")
+        if mode == "alt":
+            snap = market_snapshot("BTCUSDT")
+            return {"topic": "trading_psychology", "symbol": "BTC",
+                    "title": "交易心理提醒", "data": snap, "content_mode": "psychology"}
         snap = market_snapshot("BTCUSDT")
         return {"topic": "contract_sentiment", "symbol": "BTC", "title": "BTC 合约情绪", "data": snap}
 
     if slot == "late_noon":
+        mode = _content_mode("late_noon")
+        if mode == "alt":
+            h = pick_debate_coin()
+            if h:
+                return {"topic": "hot_debate", "symbol": h["base"],
+                        "title": f"讨论${h['base']}：多空分歧最大", "data": h, "content_mode": "debate"}
+            snap = market_snapshot("BTCUSDT")
+            return {"topic": "btc_debate", "symbol": "BTC",
+                    "title": "BTC多空争议", "data": snap, "content_mode": "debate"}
+        # original
         h = pick_day_recap()
         if h:
             return {"topic": "day_recap", "symbol": h["base"], "title": f"今日热门：{h['base']}", "data": h}
@@ -375,10 +431,82 @@ def _clean_content(content: str) -> str:
 def make_square_post(slot: str, item: dict) -> str:
     data_text = render_data(item)
     slot_label = SLOT_LABEL.get(slot, slot)
+    cm = item.get("content_mode", "")
 
-    # ---- 新时段专用提示词（4个新slot）----
+    # ---- 3 种新内容类型提示词（与原有行情交替出现）----
 
-    if slot == "pre_market":
+    if cm == "story":
+        prompt = f"""你是一个在币安广场做行情复盘的老韭菜。风格：说人话、讲故事、有情绪、有反思，不要像AI念数据。
+
+现在写一条币圈行情复盘故事。挑一个最近波动大的币，讲一段它的行情故事。
+
+铁律：
+1.只输出正文，不要"今天给大家讲个故事"这种开场白。
+2.开头就是钩子，像在群里跟兄弟分享一件刚发生的事，比如"前两天$xxx这波，说实话我是真没想到"。
+3.每句独立成行，句间空一行。全文180-320字，短句为主。
+4.正文要有：这个币最近发生了什么（涨了还是跌了多少、为什么）、一段行情故事（谁在买/谁在跑/情绪怎么变的）、一个教训或反思。
+5.数据可以提但不堆砌，让人感受到数字背后的情绪。
+6.不能写"必涨、稳赚、梭哈、无脑多、无脑空"。
+7.结尾要有人味，不喊单。可以是一个感悟、一个自嘲、或者一个给读者的提醒。
+8.标签3-4个：#行情复盘 #币圈故事 #${item['symbol']} #交易心态。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    elif cm == "psychology":
+        prompt = f"""你是币安广场上一个聊交易心态的老韭菜。风格：像过来人跟新韭菜聊天，不是老师，不是说教，是自己踩过坑的真实感受。
+
+写一条交易心理/风险提醒帖。
+
+铁律：
+1.只输出正文。
+2.开头用一句跟交易心态有关的话切入，比如"刚看到一个兄弟追高扛单的帖子，想起我第一次扛单的时候"、"最亏钱的不是看错方向，是看对方向但管不住手"。
+3.每句独立成行，句间空一行。160-280字。
+4.正文要有一个真实感的故事或场景（可以是虚构的，但要像真的）：某个人做了什么操作、结果怎样、教训是什么。
+5.不要列"几条建议"，要像聊天一样自然带出观点。
+6.不能写杠杆建议，不喊单。
+7.结尾留一个让人想聊的点："你有没有扛过单？"、"你最大的一笔学费是多少？"之类。
+8.标签：#交易心态 #合约 #风险控制 #币圈。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+当前盘面背景（仅参考，不要直接写）：
+{data_text}
+
+直接输出正文。"""
+
+    elif cm == "debate":
+        prompt = f"""你是币安广场上一个爱聊行情争议的号。风格：有自己观点但留余地，抛出话题让人讨论，不是下结论。
+
+写一条多空争议帖。
+
+铁律：
+1.只输出正文。
+2.开头点出一个争议话题，比如"现在最分裂的币就是${item['symbol']}，有人说明天就起飞，有人说这波就是诱多"。
+3.每句独立成行，句间空一行。180-300字。
+4.正文要写出两种对立观点：多头怎么看、空头怎么看，各1-2句。然后说一句自己的倾向但不把话说死。
+5.数据可以提但不堆砌，用来支撑两边的观点。
+6.不能喊单，不能用"必涨"、"肯定跌"之类断语。
+7.结尾留争议问题让人站队，比如"你是多军还是空军？"、"这个位置你会多还是空？"、"评论区说说你的方向？"。
+8.标签：#${item['symbol']} #多空博弈 #币圈 #行情讨论。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    # ---- 其他时段（按 slot 分支）----
+
+    if cm:
+        # content_mode 已处理，直接跳到生成
+        pass
+    elif slot == "pre_market":
         prompt = f"""你是一个混币安广场的行情观察号，说话风格像一个盯了几年盘的老韭菜。不装神，不喊单，但敢说自己的判断。
 
 现在开盘前，写一条开盘前瞻帖。
