@@ -26,6 +26,15 @@ BOT_DIR = Path(__file__).parent
 DEDUP_DB = BOT_DIR / ".binance_pushed.sqlite3"
 UA = {"User-Agent": "obsidian-bot/1.0"}
 
+# 同一天内已用币种，避免同一币出现在不同时段
+def _today_used_coins() -> set:
+    with _db() as c:
+        rows = c.execute(
+            "SELECT DISTINCT symbol FROM pushed WHERE pushed_at LIKE ?",
+            (f"{today_str()}%",),
+        ).fetchall()
+    return {r[0] for r in rows}
+
 DATA_BASE = "https://data-api.binance.vision"
 
 STABLES = {"USDC", "FDUSD", "TUSD", "USDP", "DAI", "BUSD", "USTC", "USD1", "USDE"}
@@ -195,7 +204,9 @@ def pick_top_gainer() -> dict:
     rows = [r for r in spot_24h() if r["priceChangePercent"] > 3 and r["quoteVolume"] > 30_000_000]
     rows.sort(key=lambda r: (r["priceChangePercent"], math.log10(r["quoteVolume"] + 1)), reverse=True)
     for r in rows:
-        if not _pushed_recent(r["base"], days=3):
+        if r["base"] in _today_used_coins():
+            continue
+        if not _pushed_recent(r["base"], days=7):
             return r
     return rows[0] if rows else None
 
@@ -205,10 +216,11 @@ def pick_early_gainer() -> dict:
     rows = [r for r in spot_24h() if r["priceChangePercent"] > 3 and r["quoteVolume"] > 30_000_000]
     rows.sort(key=lambda r: (r["priceChangePercent"], math.log10(r["quoteVolume"] + 1)), reverse=True)
     for r in rows:
-        if r["base"] not in MAJORS and not _pushed_recent(r["base"], days=2):
+        if r["base"] not in MAJORS and r["base"] not in _today_used_coins() and not _pushed_recent(r["base"], days=5):
             return r
     for r in rows:
-        return r
+        if r["base"] not in _today_used_coins():
+            return r
     return None
 
 
@@ -216,7 +228,7 @@ def pick_hot_symbol() -> dict:
     rows = [r for r in spot_24h() if r["quoteVolume"] > 100_000_000]
     rows.sort(key=lambda r: (math.log10(r["quoteVolume"] + 1), abs(r["priceChangePercent"])), reverse=True)
     for r in rows:
-        if r["base"] not in MAJORS and not _pushed_recent(r["base"], days=2):
+        if r["base"] not in MAJORS and r["base"] not in _today_used_coins() and not _pushed_recent(r["base"], days=5):
             return r
     return rows[0] if rows else None
 
@@ -226,7 +238,7 @@ def pick_day_recap() -> dict:
     rows = [r for r in spot_24h() if r["quoteVolume"] > 80_000_000 and abs(r["priceChangePercent"]) > 2]
     rows.sort(key=lambda r: (math.log10(r["quoteVolume"] + 1), abs(r["priceChangePercent"])), reverse=True)
     for r in rows:
-        if r["base"] not in MAJORS and not _pushed_recent(r["base"], days=1):
+        if r["base"] not in MAJORS and r["base"] not in _today_used_coins() and not _pushed_recent(r["base"], days=3):
             return r
     return rows[0] if rows else None
 
@@ -238,7 +250,7 @@ def pick_big_mover() -> dict:
         rows = [r for r in spot_24h() if r["quoteVolume"] > 80_000_000]
     rows.sort(key=lambda r: (abs(r["priceChangePercent"]), math.log10(r["quoteVolume"] + 1)), reverse=True)
     for r in rows:
-        if r["base"] not in MAJORS and not _pushed_recent(r["base"], days=4):
+        if r["base"] not in MAJORS and r["base"] not in _today_used_coins() and not _pushed_recent(r["base"], days=7):
             return r
     return rows[0] if rows else None
 
@@ -250,7 +262,7 @@ def pick_debate_coin() -> dict:
     if not rows:
         rows = sorted(spot_24h(), key=lambda r: r["quoteVolume"], reverse=True)[:10]
     for r in rows:
-        if r["base"] not in MAJORS and not _pushed_recent(r["base"], days=1):
+        if r["base"] not in MAJORS and r["base"] not in _today_used_coins() and not _pushed_recent(r["base"], days=3):
             return r
     return rows[0] if rows else rows[0]
 
@@ -332,11 +344,11 @@ def build_item(slot: str) -> dict:
     if slot == "afternoon":
         mode = _content_mode("afternoon")
         if mode == "alt":
-            snap = market_snapshot("BTCUSDT")
-            return {"topic": "trading_psychology", "symbol": "BTC",
+            snap = market_snapshot("ETHUSDT")
+            return {"topic": "trading_psychology", "symbol": "ETH",
                     "title": "交易心理提醒", "data": snap, "content_mode": "psychology"}
-        snap = market_snapshot("BTCUSDT")
-        return {"topic": "contract_sentiment", "symbol": "BTC", "title": "BTC 合约情绪", "data": snap}
+        snap = market_snapshot("ETHUSDT")
+        return {"topic": "contract_sentiment", "symbol": "ETH", "title": "ETH 合约情绪", "data": snap}
 
     if slot == "late_noon":
         mode = _content_mode("late_noon")
@@ -588,17 +600,17 @@ def make_square_post(slot: str, item: dict) -> str:
     elif slot == "afternoon":
         prompt = f"""你是币安广场上聊合约情绪的行情号。说话像老韭菜在复盘：有数据、有观点、不说套话。
 
-现在写一条午后合约情绪帖。
+现在写一条午后ETH合约情绪帖。
 
 铁律：
 1.只输出正文。
-2.开头钩子：用一句话点出当前的合约氛围——多头亢奋还是空头压着？比如"今天这资金费率，多头有点上头"。
+2.开头钩子：用一句话点出ETH当前合约氛围——多头亢奋还是空头压着？比如"ETH这资金费率，多头有点上头"。
 3.每句单独成行，句间空一行。全文150-280字。
-4.正文要有：BTC当前多空氛围分析（结合趋势、成交额、价格位置）、如果费率偏高提醒一句风险、下午可能怎么走（1-2句判断）。
+4.正文要有：ETH当前多空氛围分析（结合趋势、成交额、价格位置）、如果费率偏高提醒一句风险、下午可能怎么走（1-2句判断）。
 5.数字融进句子，不要列清单。
 6.不能写杠杆建议，不能喊单。
-7.结尾互动："下午这行情你是空仓看戏，还是短线搞一波？"之类。
-8.标签：#BTC #合约 #资金费率 #行情。
+7.结尾互动："下午ETH你是空仓看戏，还是短线搞一波？"之类。
+8.标签：#ETH #合约 #资金费率 #行情。
 9.零emoji，纯文本。
 
 主题：{item['title']}
