@@ -593,48 +593,64 @@ def make_brief_tweet(item: dict) -> str:
     shape = _pick_shape(item)
     shape_name = shape.get("name", "自然观点型") if isinstance(shape, dict) else str(shape)
     shape_rule = shape.get("rule", "按自然段写，不要套固定模板。") if isinstance(shape, dict) else str(shape)
-    link_hint = ""
-    if item.get("link_kind"):
-        link_hint = f"\n链接性质：{item['link_kind']}（写的时候要把链接当成'可直接用/可下载/可 star 的入口'，行动召唤要具体，比如 star、clone、下载、丢进去试，不要泛泛说链接在下面）"
 
+    # ---- 链接策略 ----
+    # 只在以下情况附链接：GitHub/开源项目、中文源、CoinGecko数据页
+    # 英文新闻/文章/Show HN 不贴链接——中文读者看不懂，贴了像广告
+    url = item.get("url", "")
+    src_lang = item.get("source_lang", "")
+    domain = item.get("domain", "")
+    link_kind = item.get("link_kind", "")
+
+    include_link = True  # 默认贴
+    if src_lang == "en" and domain == "tech":
+        include_link = False  # 英文科技新闻→不贴
+    if src_lang == "en" and domain == "tools" and "GitHub" not in link_kind and "github" not in url.lower():
+        include_link = False  # 英文 Show HN 工具→不贴
+    # GitHub、中文源、CoinGecko 都贴
+
+    link_line = f"\n{url}" if include_link else ""
+    link_instruction = ""
+    if include_link:
+        if link_kind and "GitHub" in link_kind:
+            link_instruction = "结尾必须单独一行放这个链接（这是个GitHub项目，你可以star/clone/下载），链接之后放hashtag。"
+        else:
+            link_instruction = "结尾单独一行放这个链接，链接之后放hashtag。"
+    else:
+        link_instruction = "不要放链接，正文就是纯观点+hashtag。"
+
+    # ---- 新提示词（去AI话） ----
     domain_instruction = {
-        "ai": "不要写成AI新闻摘要。要写成AI正在改变工作流、职业饭碗、老板算盘、普通人焦虑的真人观点。",
-        "tools": "不要上来介绍项目。先说它解决了什么烦人的破事，再说为什么值得试。重点是痛点、工作流、少加班，而不是项目参数。",
-        "tech": "不要写成HN/Reddit新闻播报。要把它翻译成中文互联网能懂的科技代梗、职场吐槽、大厂吃瓜或社会话题。",
-        "crypto": "不要喊单。写盘面情绪、老韭菜心态、追高风险和资金关注点，像人在复盘。",
-    }.get(item["domain"], "写成人的判断，不要写成资讯摘要。")
+        "ai": "像刷到一条AI新闻后跟朋友聊天的感觉。重点不是播报新闻，是你看了之后的第一反应——这东西对打工人意味着什么、会不会又变成老板裁人的理由、跟国产大模型比差在哪。不要用'AI正在改变XXX'这种套话开头。",
+        "tools": "像你发现了一个省事的工具，在群里跟兄弟分享。先说痛点——以前干这破事多折腾，再说这东西怎么把事压成一步。不要写成产品介绍，要写成'我用了一下觉得还行，你们看看'。",
+        "tech": "像在茶水间跟同事吐槽。把技术新闻翻译成普通人的感受，可以是吃瓜、可以是扎心、可以是荒诞。不要做新闻播报，要做'这件事翻译过来就是...'。",
+        "crypto": "像盯盘老韭菜在群里闲聊。不喊单，但敢说自己的判断。讲盘面情绪、追高风险、资金往哪走。不要写'今日行情分析'，要写'今天这盘看着...'。",
+    }.get(item.get("domain", ""), "像跟朋友聊天，不是写稿子。")
 
-    prompt = f"""你是一个混迹中文 X/Twitter 的内容博主，具体角色：{style['persona']}。风格参考"鸟哥|蓝鸟会"：口语化、有钩子、有真实判断、有一点聊天感，但不要油腻，不要像营销号，不要每条都一个套路。
+    prompt = f"""写一条发在X/Twitter上的中文内容。不要写成文章、不要写成新闻稿、不要写成AI总结。就像你在群里跟朋友分享一个刚看到的东西。
 
-现在要根据下面这条信息写一条中文推文。目标读者是中文互联网用户，不是英文技术圈。信息源只是背景材料，最终要写成一个人的观点、吐槽、故事或判断，不要写成资讯摘要。
+{domain_instruction}
 
-本条叙事角度：{angle}
-本条内容形态：{shape_name}
-本条形态规则：{shape_rule}
-领域写法要求：{domain_instruction}
-
-硬规则（违反任何一条都算失败）：
-1. 全文 350-520 个中文字符左右（包含链接和hashtag）；可以比普通短推长一点，但不要水，不要写成小作文。
-2. 段落之间必须空一行。每条必须有 2-4 个核心信息点，但表达方式必须跟随“本条形态规则”，不要所有内容都套同一种格式。
-3. 只有形态规则明确允许时，才可以使用 1️⃣ 2️⃣ 3️⃣；如果形态规则写了“禁止使用 1️⃣2️⃣3️⃣”，正文里绝对不能出现这三个序号emoji。
-4. 除 1️⃣2️⃣3️⃣ 外，禁止其他 emoji（比如火箭、火、笑脸、箭头、手指等）。
-5. 开头第一句必须从人的感受、痛点、场景、吐槽或判断切入。参考方向：{style['vibes']}。
-6. 严禁以下开头或近似表达："一觉醒来HN又炸了"、"HN上又吵起来了"、"HackerNews刷到"、"Reddit评论区炸了"、"今天看到一个"、"这个项目"、"近期发现"、"分享一个"、"今天给大家推荐"、"为大家介绍"。
-7. 不要写 HN/Reddit 的点赞数、评论数、热度数字，也不要写"评论区炸了"。这些是信息源痕迹，容易暴露AI感。可以使用真正有内容价值的数字：价格、涨幅、版本号、节省比例、stars、token、时间成本等。
-8. 如果素材来自英文，必须转译成中文用户能感受到的场景：打工人、程序员、小老板、自媒体、国内AI工具、微信/抖音/小红书生态、国产大模型、远程办公、职场内卷。不要保留外网搬运腔。
-9. 不要直接复述标题。要提炼核心内容：发生了什么、为什么重要、普通人/开发者/交易者该怎么看。
-10. 纯文本，不用 markdown 的 # 标题、不用 ** 加粗、不用 > 引用块、不用任何反引号；技术词直接裸写，比如 fork()+exec()。
-11. 结尾必须有一个真人式互动/行动召唤：比如"这事你怎么看"、"我先 mark 周末试"、"你会接还是等回踩"、"别光听我吹，自己跑一遍"。
-12. 行动召唤之后单独一行附链接：{item['url']}
-13. 最后另起一行，3-4 个相关中文 hashtag（# 开头空格分隔），贴合主题。
-
-主题领域：{style['label']}
-信息源数据（只用于判断，不要照抄热度数字）：{item.get('extra','')}{link_hint}
+背景信息（不是让你翻译它，是让你有东西可聊）：
 标题：{item['title']}
-链接：{item['url']}
+补充信息：{item.get('extra','')}
 
-直接输出推文正文，不要"好的我来写"这种废话开头。输出前自查：去掉HN/Reddit痕迹、去掉废话、严格遵守本条内容形态，不要把所有推文都写成同一个模板。"""
-    return ai_chat(prompt, model=MODEL_FAST, max_tokens=1800).strip()
+写的时候注意：
+- 开头不要用"今天看到"、"分享一个"、"最近发现"这种。直接切进你想说的点。
+- 不要提HN、Reddit、V2EX这些信息源名字。你不是在做搬运，你在表达观点。
+- 如果有具体数字（价格、涨幅、stars、版本号、省了多少时间），可以提一个当论据，但别堆数字。
+- 句子有长有短。偶尔用一个很短的句子制造停顿。
+- 绝对不用反引号包裹技术词，不用markdown列表（不要用 - 开头的行），纯文本、纯自然段。技术名词直接裸写，比如写 iroh 不要写 `iroh`。
+- 全文严格250-400字，写完之后数一下，超过400字就删废话。
+- {link_instruction}
+- 正文最后另起一行放3-4个中文hashtag（#开头空格分隔）。
+
+内容形态参考：{shape_rule}
+叙事角度参考：{angle}
+{link_line}
+
+直接输出正文。"""
+    return ai_chat(prompt, model=MODEL_FAST, max_tokens=1200).strip()
 
 
 # ---------------- 主流程 ----------------
