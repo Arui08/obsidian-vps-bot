@@ -460,64 +460,157 @@ def render_data(item: dict) -> str:
 
 
 def fallback_square_post(slot: str, item: dict) -> str:
-    """AI 返回空内容或发帖接口判空时的本地兜底模板。"""
+    """AI 返回空内容或发帖接口判空时的本地兜底模板。每个时段有专属模板。"""
     d = item["data"]
     slot_label = SLOT_LABEL.get(slot, slot)
 
-    # 全天复盘兜底
+    def _snap_price(dd):
+        if "current" in dd:
+            return _fmt_price(dd["current"]), _fmt_pct(dd.get("change24", 0)), _fmt_price(dd.get("high24", 0)), _fmt_price(dd.get("low24", 0)), f"{dd.get('quoteVolume', 0)/1e8:.2f}亿USDT"
+        return _fmt_price(dd["lastPrice"]), _fmt_pct(dd.get("priceChangePercent", 0)), _fmt_price(dd.get("highPrice", 0)), _fmt_price(dd.get("lowPrice", 0)), f"{dd.get('quoteVolume', 0)/1e8:.2f}亿USDT"
+
+    # ---- 全天复盘 ----
     if "btc" in d and "eth" in d and "top" in d:
         b, e = d["btc"], d["eth"]
+        bp, bpct, bh, bl, bv = _snap_price(b)
+        ep, epct, eh, el, ev = _snap_price(e)
         t = d.get("top")
-        top_line = f"今日最强 ${t['base']}：{_fmt_pct(t['priceChangePercent'])}，成交{t['quoteVolume']/1e8:.2f}亿" if t else ""
-        return f"""睡前扫一眼今天盘面。
+        tbase = t["base"] if t else "?"
+        tp, tpct = (_fmt_price(t["lastPrice"]), _fmt_pct(t.get("priceChangePercent", 0))) if t else ("?", "?")
+        tv = f"{t.get('quoteVolume', 0)/1e8:.2f}亿" if t else "?"
+        x = f"今天最猛的是 ${tbase}，全天涨了 {tpct}"
+        return (
+            f"睡前把今天盘面捋了一遍。说实话，今天走得挺有信息量的。\n\n"
+            f"BTC 今天从 {bl} 到 {bh} 之间晃，最后收在 {bp}，全天 {bpct}。"
+            f"这个走势最值得看的不是涨跌本身，而是成交额有没有跟上。今天 {bv}，说实话不算活跃，说明市场情绪还是比较谨慎的。\n\n"
+            f"ETH 这边稍微{'强' if epct.startswith('+') else '弱'}一点，全天 {epct}，收在 {ep}，"
+            f"波动区间 {el} 到 {eh}。"
+            f"和大饼的联动还是很明显，大饼不动它也很难独立走。\n\n"
+            f"{x}，成交 {tv}。"
+            f"这种走势要么是资金提前埋伏，要么就是情绪博弈放大了波动。\n\n"
+            f"今天最核心的信号：BTC 能不能在关键位置放量，决定接下来的方向。"
+            f"明天我会重点看 BTC 的 xxx 位置能不能守住。\n\n"
+            f"今天你们打到猎物了吗？明天你最关注哪个币？\n\n"
+            f"#BTC #ETH #全天复盘 #币圈"
+        )
 
-BTC 收在 {_fmt_price(b['current'])}，全天 {_fmt_pct(b['change24'])}，高低点 {_fmt_price(b['high24'])} / {_fmt_price(b['low24'])}。
-ETH 收在 {_fmt_price(e['current'])}，全天 {_fmt_pct(e['change24'])}，高低点 {_fmt_price(e['high24'])} / {_fmt_price(e['low24'])}。
-{top_line}
-
-今天最关键的信号是：BTC 有没有站稳关键位，ETH 有没有跟着大饼走。
-
-明天你最先关注哪个？
-
-#BTC #ETH #全天复盘 #币圈"""
-
+    # ---- 开盘前瞻 ----
     if "btc" in d and "eth" in d:
         b, e = d["btc"], d["eth"]
-        return f"""开盘前扫一眼：BTC 在 {_fmt_price(b['current'])}（{_fmt_pct(b['change24'])}），ETH 在 {_fmt_price(e['current'])}（{_fmt_pct(e['change24'])}）。
-
-BTC 24h 高 {_fmt_price(b['high24'])} 低 {_fmt_price(b['low24'])}，趋势 {b['trend']}。
-ETH 24h 高 {_fmt_price(e['high24'])} 低 {_fmt_price(e['low24'])}，趋势 {e['trend']}。
-
-开盘最该盯的不是涨跌，是BTC能不能站稳关键位、ETH有没有跟着动。
-
-今天开盘你们先盯大饼还是先盯山寨？
-
-#BTC #ETH #早盘 #行情前瞻"""
+        bp, bpct, bh, bl, bv = _snap_price(b)
+        ep, epct, eh, el, ev = _snap_price(e)
+        bdir = "偏强" if bpct.startswith("+") else "偏弱"
+        edir = "偏强" if epct.startswith("+") else "偏弱"
+        return (
+            f"开盘前扫一眼。BTC 现在卡在 {bp}，24h {bpct}，整体 {bdir}。"
+            f"ETH 在 {ep} 附近，24h {epct}，也是 {edir}。\n\n"
+            f"BTC 夜里走的区间是 {bl} 到 {bh}，这个位置挺关键的。"
+            f"如果开盘能放量站稳 {bh} 附近，短线情绪会好很多；"
+            f"反过来如果开盘就往 {bl} 下面砸，那今天大概率是个震荡日。\n\n"
+            f"ETH 这边更看 BTC 脸色。大饼不给方向，以太很难自己独立走。"
+            f"成交额 {ev}，不算活跃，说明大家都在等开盘的信号。\n\n"
+            f"今天我不会一开盘就动手。先看半小时，确认方向再说。"
+            f"你们开盘先盯大饼还是先盯山寨？\n\n"
+            f"#BTC #ETH #早盘 #行情前瞻"
+        )
 
     symbol = item["symbol"]
+
+    # ---- 各时段专属兜底 ----
     if "current" in d:
-        price = _fmt_price(d["current"])
-        pct = _fmt_pct(d["change24"])
-        high = _fmt_price(d["high24"])
-        low = _fmt_price(d["low24"])
-        volume = f"{d['quoteVolume']/1e8:.2f}亿USDT"
+        price, pct, high, low, volume = _fmt_price(d["current"]), _fmt_pct(d["change24"]), _fmt_price(d["high24"]), _fmt_price(d["low24"]), f"{d['quoteVolume']/1e8:.2f}亿USDT"
     else:
-        price = _fmt_price(d["lastPrice"])
-        pct = _fmt_pct(d["priceChangePercent"])
-        high = _fmt_price(d["highPrice"])
-        low = _fmt_price(d["lowPrice"])
-        volume = f"{d['quoteVolume']/1e8:.2f}亿USDT"
+        price, pct, high, low, volume = _fmt_price(d["lastPrice"]), _fmt_pct(d["priceChangePercent"]), _fmt_price(d["highPrice"]), _fmt_price(d["lowPrice"]), f"{d['quoteVolume']/1e8:.2f}亿USDT"
 
-    return f"""${symbol} 这波盘面有点值得盯一下，不是单纯看涨跌，而是看资金有没有继续接。
+    if slot == "morning":
+        return (
+            f"ETH 早盘现在在 {price} 晃，24h {pct}。\n\n"
+            f"昨晚高低点 {high} / {low}，整体在区间内震荡。"
+            f"早盘最关键的看点是能不能守住 {low} 这个位置——"
+            f"如果破了，下面空间就打开了；如果稳住了，短线可以看一波小反弹。\n\n"
+            f"成交额 {volume}，量不算大，说明早盘资金还在观望，没有明显的方向性选择。"
+            f"这时候最忌讳急着动手，先看清楚再出手。\n\n"
+            f"ETH 早盘你们准备怎么操作？\n\n"
+            f"#ETH #早盘 #行情分析 #币圈"
+        )
 
-现在价格在 {price}，24h涨跌 {pct}，日内高点 {high}，低点 {low}，成交额大概 {volume}。这个位置最怕的是情绪上头直接追，结果刚好追在短线压力附近。
+    if slot == "mid_morning":
+        return (
+            f"早盘扫了一圈，${symbol} 今天有点意思，直接拉了 {pct}。\n\n"
+            f"现在价格在 {price}，日内高低点 {high} / {low}。"
+            f"成交额 {volume}，说明有资金在主动买，不是散户瞎冲。\n\n"
+            f"这种早盘突然放量的币，两种情况最常见："
+            f"要么是有利好提前被资金嗅到了，要么是主力在试盘。"
+            f"不管是哪种，这个时候最怕的就是无脑追。"
+            f"已经涨了这么多，追进去风险大于机会。\n\n"
+            f"如果你已经在里面了，盯好 {low} 这个位置，破了一定要走。"
+            f"如果还没进，建议等回调到有支撑的位置再考虑。\n\n"
+            f"早盘这波你追了吗？\n\n"
+            f"#早盘 #涨幅榜 #{symbol} #行情"
+        )
 
-我的看法很简单：如果能在高位附近继续放量站稳，说明资金还没走；如果冲高后量跟不上，就要小心回踩确认。尤其是{slot_label}这个时间段，很多人容易被一根线带节奏。
+    if slot == "noon":
+        return (
+            f"午饭时间扫一眼盘。${symbol} 今天走势挺强的，24h 涨了 {pct}。\n\n"
+            f"现在价格 {price}，日内高 {high} 低 {low}，成交额 {volume}。"
+            f"这个量能说明不是小打小闹，确实有资金在关注它。\n\n"
+            f"但我还是要说一句：午盘追高是有代价的。"
+            f"很多币中午冲一波，下午就开始回落。"
+            f"如果你看好它，与其现在冲进去，不如等下午确认一下承接再说。\n\n"
+            f"午盘这个位置，你是已经上车了还是在等回调？\n\n"
+            f"#{symbol} #午盘 #涨幅榜 #币圈"
+        )
 
-你觉得 ${symbol} 这里是在蓄势突破，还是短线诱多？
+    if slot == "afternoon":
+        return (
+            f"下午盘面走到这，ETH 在 {price} 附近，24h {pct}。\n\n"
+            f"日内区间 {low} 到 {high}，成交额 {volume}。"
+            f"从盘面看，多空双方现在都没有太大的动作，都在等一个信号。\n\n"
+            f"如果下午能放量突破 {high}，说明多头还有点想法；"
+            f"反过来如果回踩 {low} 还站不住，那这一波可能就要告一段落了。"
+            f"合约的朋友这个时候最忌讳的就是重仓赌方向，容易被一根线带走。\n\n"
+            f"下午这行情你是空仓看戏，还是短线搞一波？\n\n"
+            f"#ETH #合约 #资金费率 #行情"
+        )
 
-#{symbol} #行情分析 #币圈 #风险控制"""
+    if slot == "late_noon":
+        return (
+            f"快收盘了，今天 ${symbol} 确实值得聊一下。\n\n"
+            f"全天涨了 {pct}，成交额 {volume}，是今天盘面里最活跃的币之一。"
+            f"价格从 {low} 一路拉到 {high}，现在回落到 {price} 附近。\n\n"
+            f"这种走势说明资金还没走，但短线获利盘也在出。"
+            f"明天最关键的看点是能不能在 {price} 附近继续放量。"
+            f"如果量跟不上，大概率会回踩一下；如果继续放量，那空间就打开了。\n\n"
+            f"今天吃到这波了吗？明天这个币你还看好吗？\n\n"
+            f"#{symbol} #今日热门 #行情复盘 #币圈"
+        )
 
+    if slot == "evening":
+        return (
+            f"ETH 晚间现在在 {price}，24h {pct}。\n\n"
+            f"今天全天区间 {low} 到 {high}，成交额 {volume}。"
+            f"晚间这个时间段，ETH 最容易跟着 BTC 的节奏走。"
+            f"如果大饼突然拉升，ETH 大概率会跟一波；"
+            f"反过来大饼跳水，ETH 也很难独善其身。\n\n"
+            f"晚间想动手的话，建议盯好 {low} 这个支撑位。"
+            f"站稳了可以考虑轻仓试试，破了就等下一个支撑。"
+            f"最怕的就是晚上情绪上头，没想清楚就冲进去。\n\n"
+            f"今晚 ETH 你最关注哪个位置？\n\n"
+            f"#ETH #晚间行情 #币圈 #以太坊"
+        )
+
+    if slot == "night":
+        return (
+            f"夜深了，睡前最后扫一眼 ${symbol}。\n\n"
+            f"全天 {pct}，收在 {price}，高低点 {high} / {low}。"
+            f"成交额 {volume}，今天这个量能算是比较有诚意的。\n\n"
+            f"从盘面看，今天最大的信号是 {symbol} {'有资金在关注' if pct.startswith('+') else '还在消化压力'}。"
+            f"明天如果能{'站稳' + price if pct.startswith('+') else '在' + low + '附近找到支撑'}，"
+            f"行情可能还有延续的空间。"
+            f"但如果明天开盘直接往下砸，那今天这波大概率就是个短炒。\n\n"
+            f"今晚不熬夜了。明天你最先关注的币是什么？\n\n"
+            f"#{symbol} #夜盘 #行情复盘 #币圈"
+        )
 
 def _clean_content(content: str) -> str:
     return (content or "").strip()
