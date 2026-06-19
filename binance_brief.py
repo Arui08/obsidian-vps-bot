@@ -315,8 +315,9 @@ def build_item(slot: str) -> dict:
                 "title": "开盘前瞻", "data": {"btc": snap_btc, "eth": snap_eth}}
 
     if slot == "morning":
-        snap = market_snapshot("BTCUSDT")
-        return {"topic": "btc_open", "symbol": "BTC", "title": "BTC 早盘走势", "data": snap}
+        # pre_market 已经覆盖了 BTC+ETH，morning 固定写 ETH 避免跟开盘前瞻撞车
+        snap = market_snapshot("ETHUSDT")
+        return {"topic": "eth_morning", "symbol": "ETH", "title": "ETH 早盘走势", "data": snap}
 
     if slot == "mid_morning":
         mode = _content_mode("mid_morning")
@@ -331,8 +332,8 @@ def build_item(slot: str) -> dict:
         if g:
             return {"topic": "early_gainer", "symbol": g["base"],
                     "title": f"早盘涨幅：{g['base']} +{g['priceChangePercent']:.1f}%", "data": g}
-        snap = market_snapshot("BTCUSDT")
-        return {"topic": "btc_mid", "symbol": "BTC", "title": "BTC 早盘走势", "data": snap}
+        snap = market_snapshot("ETHUSDT")
+        return {"topic": "eth_mid", "symbol": "ETH", "title": "ETH 早盘走势", "data": snap}
 
     if slot == "noon":
         g = pick_top_gainer()
@@ -375,8 +376,8 @@ def build_item(slot: str) -> dict:
         h = pick_hot_symbol()
         if h:
             return {"topic": "hot_symbol", "symbol": h["base"], "title": f"{h['base']} 夜盘复盘", "data": h}
-        snap = market_snapshot("BTCUSDT")
-        return {"topic": "btc_night", "symbol": "BTC", "title": "BTC 夜盘观察", "data": snap}
+        snap = market_snapshot("ETHUSDT")
+        return {"topic": "eth_night", "symbol": "ETH", "title": "ETH 夜盘观察", "data": snap}
 
     raise ValueError(f"未知 slot: {slot}")
 
@@ -642,19 +643,19 @@ def make_square_post(slot: str, item: dict) -> str:
 直接输出正文。"""
 
     elif slot == "morning":
-        prompt = f"""你是币安广场上一个每天盯BTC早盘的老韭菜。风格：看了盘就直接说，有判断但不装，数字融在话里不堆砌。
+        prompt = f"""你是币安广场上一个每天盯早盘的老韭菜。风格：看了盘就直接说，有判断但不装，数字融在话里不堆砌。
 
-现在写一条BTC早盘帖。观众都是币圈老炮，别写官样文章。
+现在写一条ETH早盘帖。观众都是币圈老炮，别写官样文章。
 
 铁律：
 1.只输出正文。
-2.开头用一句话点出BTC现在的状态和关键位置，比如"大饼今天开盘卡在6万5，不上不下，多空都在等一个方向"。
+2.开头用一句话点出ETH现在的状态和关键位置，比如"ETH今早在1700附近晃，看着像在等大饼给方向"。
 3.每句独立成行，句间空一行。150-280字，短句像在群里吹水。
-4.正文要有：BTC现在什么位置、关键支撑和压力在哪、早盘最可能怎么走、有什么风险。
+4.正文要有：ETH现在什么位置、关键支撑和压力在哪、早盘最可能怎么走、有什么风险。
 5.数据（价格、涨跌、高低点、成交额、趋势）必须出现但不罗列，融进句子。
 6.不能写"必涨、稳赚、梭哈、无脑多、无脑空"。
 7.结尾一句话互动："早盘你们怎么看的？"、"这个位置你动手了吗？"之类。
-8.标签：#BTC #早盘 #行情分析 #币圈。
+8.标签：#${item['symbol']} #早盘 #行情分析 #币圈。
 9.零emoji，纯文本。
 
 主题：{item['title']}
