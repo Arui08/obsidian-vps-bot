@@ -852,9 +852,9 @@ def run_slot(slot: str) -> str:
     try:
         content = make_square_post(slot, item)
     except Exception as e:
-        msg = f"⚠️ 币安广场 {SLOT_LABEL[slot]} 生成失败：${item['symbol']}\n{e}"
-        tg_send(msg)
-        return msg
+        print(f"AI生成失败，使用兜底模板: {e}")
+        content = fallback_square_post(slot, item)
+        tg_send(f"⚠️ 币安广场 {SLOT_LABEL[slot]} AI生成失败，已用兜底模板\n${item['symbol']}")
 
     content = _clean_content(content)
     print(f"准备发币安广场: slot={slot} symbol={item['symbol']} content_len={len(content)}")
