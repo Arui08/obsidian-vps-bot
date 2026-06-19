@@ -46,21 +46,38 @@ def now_str():
     return now_cn().strftime("%Y-%m-%d %H:%M:%S")
 
 
+import time
+
 _client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
 
-def ai_chat(prompt: str, model: str = None, system: str = None, max_tokens: int = 4000) -> str:
-    """调用AI"""
+def ai_chat(prompt: str, model: str = None, system: str = None, max_tokens: int = 4000, retries: int = 3) -> str:
+    """调用AI，自动重试429/5xx"""
     msgs = []
     if system:
         msgs.append({"role": "system", "content": system})
     msgs.append({"role": "user", "content": prompt})
-    resp = _client.chat.completions.create(
-        model=model or MODEL_FAST,
-        messages=msgs,
-        max_tokens=max_tokens,
-    )
-    return resp.choices[0].message.content.strip()
+
+    last_error = None
+    for attempt in range(retries):
+        try:
+            resp = _client.chat.completions.create(
+                model=model or MODEL_FAST,
+                messages=msgs,
+                max_tokens=max_tokens,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            last_error = e
+            msg = str(e)
+            # 429 或 5xx 才重试，其他直接抛
+            if "429" not in msg and "500" not in msg and "502" not in msg and "503" not in msg:
+                raise
+            if attempt < retries - 1:
+                wait = (attempt + 1) * 15
+                print(f"ai_chat 重试 {attempt+1}/{retries}: {e.__class__.__name__}，等待{wait}s")
+                time.sleep(wait)
+    raise last_error
 
 
 def ai_chat_audio(prompt: str, audio_bytes: bytes, audio_format: str = "ogg",
