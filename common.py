@@ -48,20 +48,32 @@ def now_str():
 
 import time
 
-_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+# 支持多个 API key 轮询：逗号分隔，失败自动切换
+_API_KEYS = [k.strip() for k in OPENAI_API_KEY.split(",") if k.strip()]
+if not _API_KEYS:
+    _API_KEYS = [OPENAI_API_KEY]
+_clients = [OpenAI(api_key=k, base_url=OPENAI_BASE_URL) for k in _API_KEYS]
+_current_client_idx = 0
 
 
-def ai_chat(prompt: str, model: str = None, system: str = None, max_tokens: int = 4000, retries: int = 3) -> str:
-    """调用AI，自动重试429/5xx"""
+def _next_client():
+    global _current_client_idx
+    _current_client_idx = (_current_client_idx + 1) % len(_clients)
+    return _clients[_current_client_idx]
+
+
+def ai_chat(prompt: str, model: str = None, system: str = None, max_tokens: int = 4000, retries: int = 5) -> str:
+    """调用AI，自动key轮询+指数退避重试"""
     msgs = []
     if system:
         msgs.append({"role": "system", "content": system})
     msgs.append({"role": "user", "content": prompt})
 
+    client = _clients[_current_client_idx]
     last_error = None
     for attempt in range(retries):
         try:
-            resp = _client.chat.completions.create(
+            resp = client.chat.completions.create(
                 model=model or MODEL_FAST,
                 messages=msgs,
                 max_tokens=max_tokens,
@@ -70,13 +82,16 @@ def ai_chat(prompt: str, model: str = None, system: str = None, max_tokens: int 
         except Exception as e:
             last_error = e
             msg = str(e)
-            # 429 或 5xx 才重试，其他直接抛
-            if "429" not in msg and "500" not in msg and "502" not in msg and "503" not in msg:
+            # 429/503/5xx → 换 key 重试；其他直接抛
+            if "429" in msg or "500" in msg or "502" in msg or "503" in msg:
+                if attempt < retries - 1:
+                    client = _next_client()
+                    wait = (attempt + 1) * 10
+                    ki = _current_client_idx + 1
+                    print(f"ai_chat key轮换→#{ki} 等待{wait}s ({e.__class__.__name__})")
+                    time.sleep(wait)
+            else:
                 raise
-            if attempt < retries - 1:
-                wait = (attempt + 1) * 15
-                print(f"ai_chat 重试 {attempt+1}/{retries}: {e.__class__.__name__}，等待{wait}s")
-                time.sleep(wait)
     raise last_error
 
 
