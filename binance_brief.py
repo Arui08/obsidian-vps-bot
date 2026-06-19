@@ -616,6 +616,18 @@ def _clean_content(content: str) -> str:
     return (content or "").strip()
 
 
+# DeepSeek 去AI话指令（所有提示词共享）
+_DEEPSEEK_STYLE = """
+【写的时候死也不能做的事】
+- 不许用"从...来看"、"从盘面来看"、"从数据来看"、"综上所述"、"总的来看"、"值得注意的是"、"需要指出的是"、"毫无疑问"、"显而易见"——这些全是AI套话。
+- 不许用"为...提供了有力支撑"、"起到了关键作用"、"充分说明了"、"印证了"——这是研报腔。
+- 不许结尾总结。你不是在写作文。说完就说完，不要最后来个"总的来说"。
+- 不许用"因此"、"所以"来连接每一段——人说话不这样。
+- 写短句。10-20个字一句。偶尔三五个字的超短句制造节奏。
+- 数据必须融进句子里，不要单独一句"成交额xxx"。
+- 像在群里发了条消息。不是写了篇文章。"""
+
+
 def make_square_post(slot: str, item: dict) -> str:
     data_text = render_data(item)
     slot_label = SLOT_LABEL.get(slot, slot)
@@ -917,6 +929,7 @@ def make_square_post(slot: str, item: dict) -> str:
 
 直接输出正文。"""
 
+    prompt += _DEEPSEEK_STYLE
     content = _clean_content(ai_chat(prompt, model=MODEL_FAST, max_tokens=1200))
     if len(content) < 30:
         print(f"AI生成内容过短 len={len(content)}，使用兜底模板")
