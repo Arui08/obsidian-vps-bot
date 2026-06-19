@@ -42,16 +42,17 @@ MAJORS = {"BTC", "ETH"}
 
 SLOT_LABEL = {
     "pre_market": "开盘前瞻",
-    "morning": "BTC早盘",
+    "morning": "ETH早盘",
     "mid_morning": "涨幅快报",
     "noon": "午盘热门币",
     "afternoon": "合约情绪",
     "late_noon": "热门盘点",
     "evening": "ETH晚间",
     "night": "夜盘复盘",
+    "recap": "全天复盘",
 }
 
-SLOT_ORDER = ["pre_market", "morning", "mid_morning", "noon", "afternoon", "late_noon", "evening", "night"]
+SLOT_ORDER = ["pre_market", "morning", "mid_morning", "noon", "afternoon", "late_noon", "evening", "night", "recap"]
 
 
 # ---------------- 去重 ----------------
@@ -379,11 +380,44 @@ def build_item(slot: str) -> dict:
         snap = market_snapshot("ETHUSDT")
         return {"topic": "eth_night", "symbol": "ETH", "title": "ETH 夜盘观察", "data": snap}
 
+    if slot == "recap":
+        btc = market_snapshot("BTCUSDT")
+        eth = market_snapshot("ETHUSDT")
+        top = pick_top_gainer()
+        sym = top["base"] if top else "?等"
+        return {"topic": "day_recap", "symbol": "BTC/ETH",
+                "title": f"全天复盘：BTC/ETH/{sym}",
+                "data": {"btc": btc, "eth": eth, "top": top}}
+
     raise ValueError(f"未知 slot: {slot}")
 
 
 def render_data(item: dict) -> str:
     d = item["data"]
+    # 全天复盘：BTC + ETH + 最强币
+    if "btc" in d and "eth" in d and "top" in d:
+        lines = ["【BTC全天】"]
+        b = d["btc"]
+        lines.extend([
+            f"当前：{_fmt_price(b['current'])}（{_fmt_pct(b['change24'])}）",
+            f"全天高点：{_fmt_price(b['high24'])}  低点：{_fmt_price(b['low24'])}",
+            f"成交额：{b['quoteVolume']/1e8:.2f}亿USDT  趋势：{b['trend']}",
+        ])
+        lines.append("【ETH全天】")
+        e = d["eth"]
+        lines.extend([
+            f"当前：{_fmt_price(e['current'])}（{_fmt_pct(e['change24'])}）",
+            f"全天高点：{_fmt_price(e['high24'])}  低点：{_fmt_price(e['low24'])}",
+            f"成交额：{e['quoteVolume']/1e8:.2f}亿USDT  趋势：{e['trend']}",
+        ])
+        t = d.get("top")
+        if t:
+            lines.append(f"【今日最强】${t['base']}")
+            lines.extend([
+                f"当前：{_fmt_price(t['lastPrice'])}（{_fmt_pct(t['priceChangePercent'])}）",
+                f"成交额：{t['quoteVolume']/1e8:.2f}亿USDT",
+            ])
+        return "\n".join(lines)
     # 开盘前瞻：BTC + ETH 双数据
     if "btc" in d and "eth" in d:
         lines = ["【BTC】"]
@@ -429,6 +463,23 @@ def fallback_square_post(slot: str, item: dict) -> str:
     """AI 返回空内容或发帖接口判空时的本地兜底模板。"""
     d = item["data"]
     slot_label = SLOT_LABEL.get(slot, slot)
+
+    # 全天复盘兜底
+    if "btc" in d and "eth" in d and "top" in d:
+        b, e = d["btc"], d["eth"]
+        t = d.get("top")
+        top_line = f"今日最强 ${t['base']}：{_fmt_pct(t['priceChangePercent'])}，成交{t['quoteVolume']/1e8:.2f}亿" if t else ""
+        return f"""睡前扫一眼今天盘面。
+
+BTC 收在 {_fmt_price(b['current'])}，全天 {_fmt_pct(b['change24'])}，高低点 {_fmt_price(b['high24'])} / {_fmt_price(b['low24'])}。
+ETH 收在 {_fmt_price(e['current'])}，全天 {_fmt_pct(e['change24'])}，高低点 {_fmt_price(e['high24'])} / {_fmt_price(e['low24'])}。
+{top_line}
+
+今天最关键的信号是：BTC 有没有站稳关键位，ETH 有没有跟着大饼走。
+
+明天你最先关注哪个？
+
+#BTC #ETH #全天复盘 #币圈"""
 
     if "btc" in d and "eth" in d:
         b, e = d["btc"], d["eth"]
@@ -722,6 +773,28 @@ def make_square_post(slot: str, item: dict) -> str:
 6.不能写明天必涨，不能喊单。
 7.结尾互动："今天你吃到这波了吗？"、"明天你最关注哪个币？"、"夜盘你还在盯吗？"之类。
 8.标签：3-4个，含 #{item['symbol']} #夜盘 #行情复盘 #币圈。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    elif slot == "recap":
+        prompt = f"""你是币安广场上一个做全天复盘的老韭菜。风格：诚实回顾今天盘面，不夸大、不装神、像睡前跟兄弟聊天总结。
+
+现在写一条全天复盘帖。不需要预测准确率，不需要打分。
+
+铁律：
+1.只输出正文。
+2.开头用一句话概括今天盘面，比如"今天这盘走得，大饼全天在6万4上下晃，以太稍微强一点"。
+3.每句独立成行，句间空一行。200-350字。
+4.正文必须有：BTC全天走势回顾（高低点、收盘位置、方向）、ETH怎么走的（跟大饼还是独立）、今天最猛的币是谁（涨了多少、为什么）、今天市场教会我们什么。
+5.数据融进句子，不堆数字。
+6.不能写"明天的方向"，可以写"明天最值得盯的"。不能喊单。
+7.结尾互动："今天你们打到猎物了吗？"、"明天你最关注哪个币？"之类。
+8.标签：#全天复盘 #BTC #ETH #币圈。
 9.零emoji，纯文本。
 
 主题：{item['title']}
