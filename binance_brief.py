@@ -633,6 +633,11 @@ def make_square_post(slot: str, item: dict) -> str:
     slot_label = SLOT_LABEL.get(slot, slot)
     cm = item.get("content_mode", "")
 
+    now = now_cn()
+    weekday_map = ["周一","周二","周三","周四","周五","周六","周日"]
+    today_cn = f"{now.strftime('%Y年%m月%d日')} {weekday_map[now.weekday()]} {now.strftime('%H:%M')}"
+    _TIME_CONTEXT = f"\n【当前北京时间：{today_cn}。如果内容涉及\"今天\"\"明天\"\"周末\"\"下周\"等时间表述，必须以此为准。今天是{weekday_map[now.weekday()]}不是周末。】"
+
     # ---- 3 种新内容类型提示词（与原有行情交替出现）----
 
     if cm == "story":
@@ -929,6 +934,7 @@ def make_square_post(slot: str, item: dict) -> str:
 
 直接输出正文。"""
 
+    prompt += _TIME_CONTEXT
     prompt += _DEEPSEEK_STYLE
     content = _clean_content(ai_chat(prompt, model=MODEL_FAST, max_tokens=1200))
     if len(content) < 30:
