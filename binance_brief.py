@@ -344,6 +344,21 @@ PHILO_ANGLE_POOL = [
 ]
 
 
+def _pick_philo_coin() -> dict:
+    """为投资哲学帖选一个当天有代表性的币种。优先 BTC/ETH，其次当日波动最大的非稳定币。"""
+    rows = [r for r in spot_24h() if r["quoteVolume"] > 50_000_000 and abs(r["priceChangePercent"]) > 1]
+    rows.sort(key=lambda r: (abs(r["priceChangePercent"]), math.log10(r["quoteVolume"] + 1)), reverse=True)
+    # 优先选 BTC 或 ETH
+    for r in rows:
+        if r["base"] in MAJORS:
+            return r
+    # 其次选今天还没在哲学帖里用过的
+    for r in rows:
+        if not _pushed_recent(r["base"], days=0):
+            return r
+    return rows[0] if rows else None
+
+
 def _philo_angle(slot: str) -> dict:
     """按日期+时段+slot稳定选一条投资哲学，4个时段每天不重复。"""
     idx_pool = list(range(len(PHILO_ANGLE_POOL)))
@@ -441,13 +456,15 @@ def build_item(slot: str) -> dict:
 
     # ---- 投资哲学帖（4条，不涉及行情，去重靠日期+时段+角度的稳定分配）----
     if slot.startswith("philo_"):
-        vibe = slot.split("_", 1)[1]  # morning / noon / afternoon / night
+        vibe = slot.split("_", 1)[1]
         angle = _philo_angle(slot)
+        coin = _pick_philo_coin()
+        sym = coin["base"] if coin else "BTC"
         return {
             "topic": f"philosophy_{vibe}",
-            "symbol": angle["icon"],
+            "symbol": sym,
             "title": f"投资哲学·{SLOT_LABEL[slot].split('·')[1]}",
-            "data": {"vibe": vibe, "angle": angle},
+            "data": {"vibe": vibe, "angle": angle, "coin": coin} if coin else {"vibe": vibe, "angle": angle},
         }
 
     raise ValueError(f"未知 slot: {slot}")
@@ -455,10 +472,14 @@ def build_item(slot: str) -> dict:
 
 def render_data(item: dict) -> str:
     d = item["data"]
-    # 投资哲学帖——不需要行情数据
+    # 投资哲学帖——附带当天代表性币种走势
     if "angle" in d:
         a = d["angle"]
-        return f"来源：{a['source']}\n角度：{a['angle']}\n（无需行情数据，以下是投资哲学/名言/感悟类短帖）"
+        lines = [f"来源：{a['source']}", f"角度：{a['angle']}"]
+        c = d.get("coin")
+        if c:
+            lines.append(f"【今日盘面案例】${c['base']} 当前{_fmt_price(c['lastPrice'])}，24h {_fmt_pct(c['priceChangePercent'])}，成交{c.get('quoteVolume',0)/1e8:.2f}亿USDT")
+        return "\n".join(lines)
     # 全天复盘：BTC + ETH + 最强币
     if "btc" in d and "eth" in d and "top" in d:
         lines = ["【BTC全天】"]
@@ -532,13 +553,22 @@ def fallback_square_post(slot: str, item: dict) -> str:
     # ---- 投资哲学兜底 ----
     if "angle" in d:
         a = d["angle"]
+        c = d.get("coin")
+        coin_tag = f"${c['base']}" if c else ""
+        coin_bit = ""
+        if c:
+            coin_bit = (
+                f"\n\n拿今天的 ${c['base']} 举个例子："
+                f"现在 {_fmt_price(c['lastPrice'])}，24h {_fmt_pct(c['priceChangePercent'])}。"
+                f"这种盘面刚好印证了上面的道理。不是什么巧合，是人性在盘面上的重复。"
+            )
         return (
             f"今早翻书看到一句话，让我在屏幕前愣了好一会。\n\n"
             f"{a['source']}里面讲到一个道理：\n"
-            f"{a['angle']}\n\n"
+            f"{a['angle']}{coin_bit}\n\n"
             f"越想越觉得，交易做到最后，比的不是技术，是心性。\n"
             f"先记下来，过段时间再回头看。\n\n"
-            f"#投资哲学 #{a.get('source','').replace('《','').replace('》','').replace(' ','')} #交易心态"
+            f"#{c['base'] if c else 'BTC'} #投资哲学 #交易心态"
         )
 
     def _snap_price(dd):
@@ -738,24 +768,33 @@ def make_square_post(slot: str, item: dict) -> str:
         angle_desc = a.get("angle", "")
         hour_map = {"morning": "早上", "noon": "午后", "afternoon": "傍晚", "night": "深夜"}
         h = hour_map.get(pdata.get("vibe", ""), "今天")
+        coin = pdata.get("coin")
+        coin_line = ""
+        if coin:
+            coin_line = (
+                f"今天盘面上 ${coin['base']} 当前 {_fmt_price(coin['lastPrice'])}，"
+                f"24h {_fmt_pct(coin['priceChangePercent'])}，"
+                f"成交 {coin.get('quoteVolume',0)/1e8:.2f} 亿USDT。"
+            )
         prompt = f"""你是币安广场上一个分享投资感悟的人。不装老师、不说教。就像一个交易了几年的老韭菜，读到某本书、某句话，跟自己的经历对上号了，顺手分享出来。
 
 现在写一条投资哲学短帖。时段：{h}。
 
 内容要求：
-- 切入来源是：{source}
-- 核心角度是：{angle_desc}
-- 围绕这个角度自然展开。用自己的话讲，不要照抄原话。如果引用原文，要给出处。
-- 必须结合你自己的交易经历或真实感受，让人觉得"这个人确实踩过这个坑"。
+- 切入来源：{source}
+- 核心角度：{angle_desc}
+- 必须用今天 ${item['symbol']} 的盘面作为"现学现用"的例子。{coin_line}把投资理念和这个盘面自然结合起来——不是分析它接下来怎么走，是"你看，今天这盘面刚好说明了这个道理"。
+- 用自己的话讲，不要照抄原话。如果引用原文，要给出处。
 
 铁律：
 1.只输出正文。
-2.开头必须有钩子，像突然想到什么就说出来。不要"今天跟大家分享"、"在这个美好的{h}"这种播音腔。
-3.每句独立成行，句间空一行。全文120-220字，不要长。
-4.不分析任何行情、不预测方向、不喊单。
-5.结尾自然收，不许用"你怎么看？""你觉得呢？"。可以是"先记下来"、"分享给你"、"就这些"这种。
-6.标签：#投资哲学 #交易心态 #币圈 #读书笔记。
-7.零emoji，纯文本。
+2.开头必须有钩子。像突然想到什么就说出来。不要"今天跟大家分享"。
+3.每句独立成行，句间空一行。全文150-280字。
+4.必须出现 ${item['symbol']} 至少一次。必须结合今天的盘面数据来阐释投资理念。
+5.不能喊单、不能预测方向、不能写"这次不一样"。
+6.结尾自然收。不许用"你怎么看？""你觉得呢？"。可以是"先记下来"、"分享给你"、"就这些"这种。
+7.标签：#${item['symbol']} #投资哲学 #交易心态 #{h}读 #{h}思。
+8.零emoji，纯文本。
 
 主题：{item['title']}
 
