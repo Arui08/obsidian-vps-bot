@@ -43,16 +43,20 @@ MAJORS = {"BTC", "ETH"}
 SLOT_LABEL = {
     "pre_market": "开盘前瞻",
     "morning": "ETH早盘",
+    "philo_morning": "投资哲学·晨思",
     "mid_morning": "涨幅快报",
     "noon": "午盘热门币",
+    "philo_noon": "投资哲学·午悟",
     "afternoon": "合约情绪",
     "late_noon": "热门盘点",
+    "philo_afternoon": "投资哲学·日省",
     "evening": "ETH晚间",
     "night": "夜盘复盘",
     "recap": "全天复盘",
+    "philo_night": "投资哲学·夜读",
 }
 
-SLOT_ORDER = ["pre_market", "morning", "mid_morning", "noon", "afternoon", "late_noon", "evening", "night", "recap"]
+SLOT_ORDER = ["pre_market", "morning", "philo_morning", "mid_morning", "noon", "philo_noon", "afternoon", "late_noon", "philo_afternoon", "evening", "night", "recap", "philo_night"]
 
 
 # ---------------- 去重 ----------------
@@ -306,6 +310,52 @@ def _psych_angle(slot: str) -> str:
     return PSYCH_ANGLE_POOL[idx]
 
 
+PHILO_ANGLE_POOL = [
+    {"icon": "📖", "source": "《股票作手回忆录》", "angle": "利弗莫尔说：不要试图捕捉市场的每一个波动，等大行情来了再动手。我在币圈才真正理解这句话——频繁操作的磨损比一次大亏还可怕。"},
+    {"icon": "🧠", "source": "《穷查理宝典》", "angle": "芒格的多元思维模型：别只用一把锤子看世界。做交易也一样，只看K线不够，你还得看情绪、看资金、看宏观。单一视角最容易亏钱。"},
+    {"icon": "🎲", "source": "《黑天鹅》", "angle": "塔勒布说黑天鹅不可预测，但你可以让自己在极端事件中活下来。在币圈，你永远不知道下一秒会不会插针、会不会下架。仓位控制不是赚钱用的，是保命用的。"},
+    {"icon": "🪞", "source": "《反脆弱》", "angle": "塔勒布区分了脆弱、坚固、反脆弱。好的交易系统不是不会被市场打，而是每次被打完都能变得更稳。爆过仓不可怕，可怕的是什么都没学到。"},
+    {"icon": "📏", "source": "《投资中最重要的事》", "angle": "霍华德·马克斯讲第二层思维：别人看到涨了就追，你看到涨了要想——谁在卖？为什么要卖？第一层思维让你随大流，第二层让你不接盘。"},
+    {"icon": "⏳", "source": "巴菲特名言语录", "angle": "巴菲特说股市是把钱从没耐心的人转移到有耐心的人的工具。在币圈这句话放大十倍。熬得住的人赚熬不住的人的钱，就这么简单。"},
+    {"icon": "💰", "source": "《随机漫步的傻瓜》", "angle": "塔勒布说区分运气和实力。币圈很多人把一轮牛市的运气当成了自己的实力，到了熊市才开始怀疑人生。诚实面对自己的成绩单，别把beta当alpha。"},
+    {"icon": "🐢", "source": "索罗斯反身性理论", "angle": "索罗斯说市场总是错的。你既是市场的观察者，也是参与者。你买的动作本身就会影响价格。所以永远不要觉得“这次不一样”，每次都一样。"},
+    {"icon": "🔍", "source": "达利欧的《原则》", "angle": "达利欧把每次失败都写成原则。我在币圈也开始记'每次亏损的原因'。翻回去一看，大部分错误都在重复犯。不是技术问题，是人性问题。"},
+    {"icon": "⚖️", "source": "芒格逆向思维", "angle": "芒格说：反过来想，总是反过来想。大家都在讨论怎么在币圈暴富，你应该问——怎么才能在币圈不亏光。先求不败，再求胜。"},
+    {"icon": "🌊", "source": "《浪潮之巅》", "angle": "每轮周期的本质都一样：新叙事→资金涌入→泡沫→崩溃→遗忘→重新再来。不同的只是讲故事的词。去年叫DeFi，今年叫AI+区块链。"},
+    {"icon": "🛡️", "source": "利弗莫尔交易箴言", "angle": "利弗莫尔说亏损最多的交易，往往不是判断错误，而是没有果断止损。他的原话是：导致大多数交易者亏损的原因，是他们不愿意承认自己错了。"},
+    {"icon": "🎯", "source": "《刻意练习》", "angle": "交易不是靠天赋，是靠刻意练习。每天复盘每一笔操作，写下来你为什么买、为什么卖、仓位多少、当时什么情绪。三个月后回看，你会被自己蠢到。"},
+    {"icon": "🕯️", "source": "《思考，快与慢》", "angle": "卡尼曼说人的大脑有两套系统：快思考是直觉，慢思考是理性。做交易时快思考让你追涨杀跌，慢思考让你等。多等五分钟，省几万。"},
+    {"icon": "🔗", "source": "《纳瓦尔宝典》", "angle": "Naval说长期主义是最大的杠杆。在币圈长期主义不等于死扛，等于你有自己的框架、有纪律、不被每一根线带节奏。真正能穿越牛熊的不是信念，是规则。"},
+    {"icon": "🪙", "source": "《货币的非国家化》", "angle": "哈耶克几十年前就说过货币可以不是国家发行的。比特币把这个理论变成了现实。但现实是，绝大多数人买比特币不是因为信仰，是因为想以更高价卖给别人。"},
+    {"icon": "👁️", "source": "塔勒布《Skin in the Game》", "angle": "塔勒布说要相信有皮肤在游戏中的人。在币圈，你要看喊单的人自己买了没有、买了多少。没持仓的建议一文不值。自己的钱自己负责。"},
+    {"icon": "🗿", "source": "《孙子兵法》", "angle": "孙子说：先为不可胜，以待敌之可胜。翻译成币圈的话：先保证自己不死，再等别人犯错。等市场恐慌到极致的时候，才是你的时机。"},
+    {"icon": "🌙", "source": "《禅与摩托车维修艺术》", "angle": "交易到一定阶段，技术分析反而没那么重要了。重要的是你有没有在安静地观察市场，不被噪音干扰。静下心来读一读这些'无用'的书，比看一百个KOL喊单有用。"},
+    {"icon": "📊", "source": "《非对称风险》", "angle": "好的交易不是赚得多，是赚的时候赚够了，亏的时候亏得少。这个非对称的比例，决定了你能不能留在牌桌上。追求胜率不如追求盈亏比。"},
+    {"icon": "💡", "source": "《邓普顿教你逆向投资》", "angle": "邓普顿说：牛市在悲观中诞生，在怀疑中成长，在乐观中成熟，在狂热中死亡。你现在觉得市场在哪个阶段？这个问题的答案，决定了你现在的仓位。"},
+    {"icon": "🔄", "source": "《周期》", "angle": "霍华德·马克斯说市场像钟摆，永远在极端之间摇摆。币圈的钟摆幅度更大。你能做的不是预测摆到哪，是在它摆过头的时候站在对面。"},
+    {"icon": "☕", "source": "晨读随感", "angle": "今早突然想通一件事：交易最大的敌人不是市场，是你自己给自己的压力。越想翻倍越容易翻车。放慢一点，反而走得远。"},
+    {"icon": "📝", "source": "交易笔记里的觉悟", "angle": "翻到三个月前的交易笔记，发现当时的判断大部分是对的方向，但都被自己反复操作给毁了。频繁调整仓位、反复止损止盈，最后什么都没抓住。少动就是多赚。"},
+    {"icon": "💤", "source": "深夜反思", "angle": "以前总觉得自己不够聪明，所以赚不到钱。后来发现正相反——是太聪明了，总想找到最优解，结果错过了一个又一个简单的机会。在这个市场，笨一点反而是优势。"},
+    {"icon": "🗣️", "source": "市场噪音与独立思考", "angle": "群里永远有人在喊'这波不一样'。但回头看，每轮牛熊的基本剧本从来没变过。不一样的是讲故事的人，一样的是最后亏钱的人。"},
+    {"icon": "🧘", "source": "交易与修心", "angle": "做交易三年，最大的收获不是赚了多少钱，是学会了跟自己和解。止损不丢人，乱止损才丢人。看错不丢人，不承认才丢人。诚实面对自己，比任何技术指标都管用。"},
+    {"icon": "🌅", "source": "凌晨4点盯盘有感", "angle": "凌晨四点被爆仓提醒惊醒，那种感觉，经历过的人才懂。后来我把所有仓位都设了止损，再也没有被半夜叫醒过。一个好的交易系统，应该让你睡得着觉。"},
+    {"icon": "🧭", "source": "《论持久战》", "angle": "这是一场持久战。不是你死我活的短线博弈，是你自己的纪律跟人性的长期拉锯。每次手痒想追的时候，问自己一个字：急什么？"},
+    {"icon": "🪶", "source": "读过无数交易书的感悟", "angle": "读了几十本投资书，最后发现所有道理都指向同一个东西：管住自己。不是市场不给你机会，是你太想抓住每一个机会。轻仓、少动、等机会，九个字够了。"},
+]
+
+
+def _philo_angle(slot: str) -> dict:
+    """按日期+时段+slot稳定选一条投资哲学，4个时段每天不重复。"""
+    idx_pool = list(range(len(PHILO_ANGLE_POOL)))
+    # 把池子按日期分成4份，每个时段从不同份里取
+    ni = int(hashlib.md5(today_str().encode("utf-8")).hexdigest(), 16) % len(PHILO_ANGLE_POOL)
+    quarter = len(PHILO_ANGLE_POOL) // 4
+    slot_offset = {"morning": 0, "noon": 1, "afternoon": 2, "night": 3}
+    offset = slot_offset.get(slot.split("_")[-1], 0)
+    idx = (ni + offset * quarter) % len(PHILO_ANGLE_POOL)
+    return PHILO_ANGLE_POOL[idx]
+
+
 # ---------------- 选题 ----------------
 
 def build_item(slot: str) -> dict:
@@ -389,11 +439,26 @@ def build_item(slot: str) -> dict:
                 "title": f"全天复盘：BTC/ETH/{sym}",
                 "data": {"btc": btc, "eth": eth, "top": top}}
 
+    # ---- 投资哲学帖（4条，不涉及行情，去重靠日期+时段+角度的稳定分配）----
+    if slot.startswith("philo_"):
+        vibe = slot.split("_", 1)[1]  # morning / noon / afternoon / night
+        angle = _philo_angle(slot)
+        return {
+            "topic": f"philosophy_{vibe}",
+            "symbol": angle["icon"],
+            "title": f"投资哲学·{SLOT_LABEL[slot].split('·')[1]}",
+            "data": {"vibe": vibe, "angle": angle},
+        }
+
     raise ValueError(f"未知 slot: {slot}")
 
 
 def render_data(item: dict) -> str:
     d = item["data"]
+    # 投资哲学帖——不需要行情数据
+    if "angle" in d:
+        a = d["angle"]
+        return f"来源：{a['source']}\n角度：{a['angle']}\n（无需行情数据，以下是投资哲学/名言/感悟类短帖）"
     # 全天复盘：BTC + ETH + 最强币
     if "btc" in d and "eth" in d and "top" in d:
         lines = ["【BTC全天】"]
@@ -463,6 +528,18 @@ def fallback_square_post(slot: str, item: dict) -> str:
     """AI 返回空内容或发帖接口判空时的本地兜底模板。每个时段有专属模板。"""
     d = item["data"]
     slot_label = SLOT_LABEL.get(slot, slot)
+
+    # ---- 投资哲学兜底 ----
+    if "angle" in d:
+        a = d["angle"]
+        return (
+            f"今早翻书看到一句话，让我在屏幕前愣了好一会。\n\n"
+            f"{a['source']}里面讲到一个道理：\n"
+            f"{a['angle']}\n\n"
+            f"越想越觉得，交易做到最后，比的不是技术，是心性。\n"
+            f"先记下来，过段时间再回头看。\n\n"
+            f"#投资哲学 #{a.get('source','').replace('《','').replace('》','').replace(' ','')} #交易心态"
+        )
 
     def _snap_price(dd):
         if "current" in dd:
@@ -653,6 +730,37 @@ def make_square_post(slot: str, item: dict) -> str:
     today_cn = f"{now.strftime('%Y年%m月%d日')} {weekday_map[now.weekday()]} {now.strftime('%H:%M')}"
     _TIME_CONTEXT = f"\n【当前北京时间：{today_cn}。如果内容涉及\"今天\"\"明天\"\"周末\"\"下周\"等时间表述，必须以此为准。今天是{weekday_map[now.weekday()]}不是周末。】"
 
+    # ---- 投资哲学帖（4条，不分析行情，去重靠角度池稳定分配）----
+    if slot.startswith("philo_"):
+        pdata = item["data"]
+        a = pdata.get("angle", {})
+        source = a.get("source", "经典")
+        angle_desc = a.get("angle", "")
+        hour_map = {"morning": "早上", "noon": "午后", "afternoon": "傍晚", "night": "深夜"}
+        h = hour_map.get(pdata.get("vibe", ""), "今天")
+        prompt = f"""你是币安广场上一个分享投资感悟的人。不装老师、不说教。就像一个交易了几年的老韭菜，读到某本书、某句话，跟自己的经历对上号了，顺手分享出来。
+
+现在写一条投资哲学短帖。时段：{h}。
+
+内容要求：
+- 切入来源是：{source}
+- 核心角度是：{angle_desc}
+- 围绕这个角度自然展开。用自己的话讲，不要照抄原话。如果引用原文，要给出处。
+- 必须结合你自己的交易经历或真实感受，让人觉得"这个人确实踩过这个坑"。
+
+铁律：
+1.只输出正文。
+2.开头必须有钩子，像突然想到什么就说出来。不要"今天跟大家分享"、"在这个美好的{h}"这种播音腔。
+3.每句独立成行，句间空一行。全文120-220字，不要长。
+4.不分析任何行情、不预测方向、不喊单。
+5.结尾自然收，不许用"你怎么看？""你觉得呢？"。可以是"先记下来"、"分享给你"、"就这些"这种。
+6.标签：#投资哲学 #交易心态 #币圈 #读书笔记。
+7.零emoji，纯文本。
+
+主题：{item['title']}
+
+直接输出正文。"""
+
     # ---- 3 种新内容类型提示词（与原有行情交替出现）----
 
     if cm == "story":
@@ -729,6 +837,9 @@ def make_square_post(slot: str, item: dict) -> str:
 
     if cm:
         # content_mode 已处理，直接跳到生成
+        pass
+    elif slot.startswith("philo_"):
+        # 投资哲学帖已在上面生成 prompt，跳过
         pass
     elif slot == "pre_market":
         prompt = f"""你是一个混币安广场的行情观察号，说话风格像一个盯了几年盘的老韭菜。不装神，不喊单，但敢说自己的判断。
