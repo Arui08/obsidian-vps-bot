@@ -174,7 +174,7 @@ def ticker(symbol: str) -> dict:
     return _get("/api/v3/ticker/24hr", {"symbol": symbol})
 
 
-def klines(symbol: str, interval: str = "1h", limit: int = 48) -> list:
+def klines(symbol: str, interval: str = "1h", limit: int = 100) -> list:
     raw = _get("/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": limit})
     return [{
         "open": float(k[1]), "high": float(k[2]), "low": float(k[3]),
@@ -182,27 +182,185 @@ def klines(symbol: str, interval: str = "1h", limit: int = 48) -> list:
     } for k in raw]
 
 
-def market_snapshot(symbol: str) -> dict:
+def _ma(values: list, period: int) -> list:
+    return [sum(values[max(0, i-period+1):i+1]) / min(i+1, period) for i in range(len(values))]
+
+
+def _ema(values: list, period: int) -> list:
+    if len(values) < 2:
+        return list(values)
+    k = 2.0 / (period + 1)
+    result = [values[0]]
+    for v in values[1:]:
+        result.append(v * k + result[-1] * (1 - k))
+    return result
+
+
+def _rsi(values: list, period: int = 14) -> float:
+    if len(values) < period + 1:
+        return 50.0
+    gains = [max(0, values[i] - values[i-1]) for i in range(1, len(values))]
+    losses = [max(0, values[i-1] - values[i]) for i in range(1, len(values))]
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def _volume_ratio(volumes: list, period: int = 20) -> float:
+    if len(volumes) < period:
+        return 1.0
+    avg = sum(volumes[-period:]) / period
+    return volumes[-1] / avg if avg > 0 else 1.0
+
+
+def tech_analysis(symbol: str) -> dict:
+    """全面技术分析：RSI/MACD/均线/成交量/布林带/支撑阻力。"""
     t = ticker(symbol)
-    ks = klines(symbol, "1h", 48)
+    ks = klines(symbol, "1h", 100)
+    closes = [k["close"] for k in ks]
+    volumes = [k["quoteVolume"] for k in ks]
     highs = [k["high"] for k in ks]
     lows = [k["low"] for k in ks]
-    closes = [k["close"] for k in ks]
     current = float(t.get("lastPrice") or closes[-1])
-    ma6 = sum(closes[-6:]) / 6
-    ma24 = sum(closes[-24:]) / 24
+    change24 = float(t.get("priceChangePercent") or 0)
+    quote_vol = float(t.get("quoteVolume") or 0)
+
+    # 均线
+    ma5 = _ma(closes, 5)
+    ma20 = _ma(closes, 20)
+    ma50 = _ma(closes, 50)
+
+    # RSI
+    rsi14 = _rsi(closes, 14)
+
+    # MACD
+    ema12 = _ema(closes, 12)
+    ema26 = _ema(closes, 26)
+    dif = ema12[-1] - ema26[-1]
+    dif_list = [ema12[i] - ema26[i] for i in range(len(ema12))]
+    dea = _ema(dif_list, 9)
+    macd_bar = (dif_list[-1] - dea[-1]) * 2 if len(dea) >= 1 else 0
+    macd_signal = "多头" if dif > (dea[-1] if dea else dif) else "空头"
+
+    # 布林带
+    period, std_mult = 20, 2
+    if len(closes) >= period:
+        ma20_val = ma20[-1]
+        std = (sum((closes[i] - ma20[i]) ** 2 for i in range(-period, 0)) / period) ** 0.5
+        upper = ma20_val + std_mult * std
+        lower = ma20_val - std_mult * std
+        bb_position = "偏上" if current > upper * 0.95 else ("偏下" if current < lower * 1.05 else "中轨附近")
+        bb_width = (upper - lower) / ma20_val * 100  # 带宽百分比
+    else:
+        upper, lower, bb_position, bb_width = 0, 0, "未知", 0
+
+    # 成交量
+    vol_ratio = _volume_ratio(volumes, 20)
+    vol_desc = "放量" if vol_ratio > 1.5 else ("缩量" if vol_ratio < 0.6 else "正常")
+
+    # 支撑/阻力
+    recent_highs = sorted(highs[-48:], reverse=True)[:3]  # 最近48h的前3高点
+    recent_lows = sorted(lows[-48:])[:3]  # 最近48h的前3低点
+    resistance = sum(recent_highs) / len(recent_highs) if recent_highs else current
+    support = sum(recent_lows) / len(recent_lows) if recent_lows else current
+
+    # 综合多空判断
+    bullish = 0
+    bearish = 0
+    if current > ma20[-1]:
+        bullish += 1
+    else:
+        bearish += 1
+    if ma5[-1] > ma20[-1]:
+        bullish += 1
+    else:
+        bearish += 1
+    if rsi14 < 30:
+        bullish += 1  # 超卖=潜在反转
+    elif rsi14 > 70:
+        bearish += 1  # 超买=警惕回调
+    if macd_signal == "多头":
+        bullish += 1
+    else:
+        bearish += 1
+    if vol_ratio > 1.2 and change24 > 0:
+        bullish += 1  # 放量上涨
+    elif vol_ratio > 1.2 and change24 < 0:
+        bearish += 1  # 放量下跌
+
+    verdict = "偏多" if bullish > bearish else ("偏空" if bearish > bullish else "中性")
+
     return {
         "symbol": symbol,
         "base": _base_symbol(symbol),
         "current": current,
-        "change24": float(t.get("priceChangePercent") or 0),
-        "quoteVolume": float(t.get("quoteVolume") or 0),
+        "change24": change24,
+        "quoteVolume": quote_vol,
         "high24": max(highs[-24:]),
         "low24": min(lows[-24:]),
         "high48": max(highs),
         "low48": min(lows),
-        "trend": "偏强" if ma6 > ma24 else "偏弱",
+        # 均线
+        "ma5": ma5[-1],
+        "ma20": ma20[-1],
+        "ma50": ma50[-1] if len(ma50) >= 1 else 0,
+        # RSI
+        "rsi14": round(rsi14, 1),
+        "rsi_desc": "超卖" if rsi14 < 30 else ("超买" if rsi14 > 70 else ("偏强" if rsi14 > 50 else "偏弱")),
+        # MACD
+        "macd_dif": round(dif, 4),
+        "macd_dea": round(dea[-1], 4) if dea else 0,
+        "macd_bar": round(macd_bar, 4),
+        "macd_signal": macd_signal,
+        # 布林
+        "bb_upper": round(upper, 2) if upper else 0,
+        "bb_lower": round(lower, 2) if lower else 0,
+        "bb_position": bb_position,
+        "bb_width": round(bb_width, 1) if bb_width else 0,
+        # 成交量
+        "vol_ratio": round(vol_ratio, 1),
+        "vol_desc": vol_desc,
+        # 支撑/阻力
+        "resistance": round(resistance, 2),
+        "support": round(support, 2),
+        # 综合
+        "verdict": verdict,
+        "bullish_count": bullish,
+        "bearish_count": bearish,
     }
+
+
+def market_snapshot(symbol: str) -> dict:
+    """兼容旧调用，返回完整技术分析。"""
+    return tech_analysis(symbol)
+
+
+def enrich_spot_pick(coin: dict) -> dict:
+    """给 spot_24h 挑出来的小币补上 K 线技术指标。"""
+    try:
+        sym = coin.get("symbol", "")
+        if not sym:
+            return coin
+        ta = tech_analysis(sym)
+        # 合并：保留 coin 原有字段 + ta 的指标字段
+        coin["rsi14"] = ta["rsi14"]
+        coin["rsi_desc"] = ta["rsi_desc"]
+        coin["macd_signal"] = ta["macd_signal"]
+        coin["macd_dif"] = ta.get("macd_dif", 0)
+        coin["vol_ratio"] = ta["vol_ratio"]
+        coin["vol_desc"] = ta["vol_desc"]
+        coin["ma5"] = ta["ma5"]
+        coin["ma20"] = ta["ma20"]
+        coin["support"] = ta["support"]
+        coin["resistance"] = ta["resistance"]
+        coin["verdict"] = ta["verdict"]
+        coin["bb_position"] = ta["bb_position"]
+    except Exception as e:
+        print(f"enrich_spot_pick {sym} 失败: {e}")
+    return coin
 
 
 def pick_top_gainer() -> dict:
@@ -404,7 +562,7 @@ def build_item(slot: str) -> dict:
     if slot == "noon":
         g = pick_top_gainer()
         if g:
-            return {"topic": "top_gainer", "symbol": g["base"], "title": f"{g['base']} 午盘热门", "data": g}
+            return {"topic": "top_gainer", "symbol": g["base"], "title": f"{g['base']} 午盘热门", "data": enrich_spot_pick(g)}
         snap = market_snapshot("ETHUSDT")
         return {"topic": "eth_noon", "symbol": "ETH", "title": "ETH 午盘走势", "data": snap}
 
@@ -430,7 +588,7 @@ def build_item(slot: str) -> dict:
         # original
         h = pick_day_recap()
         if h:
-            return {"topic": "day_recap", "symbol": h["base"], "title": f"今日热门：{h['base']}", "data": h}
+            return {"topic": "day_recap", "symbol": h["base"], "title": f"今日热门：{h['base']}", "data": enrich_spot_pick(h)}
         snap = market_snapshot("ETHUSDT")
         return {"topic": "eth_recap", "symbol": "ETH", "title": "ETH 日内复盘", "data": snap}
 
@@ -441,7 +599,7 @@ def build_item(slot: str) -> dict:
     if slot == "night":
         h = pick_hot_symbol()
         if h:
-            return {"topic": "hot_symbol", "symbol": h["base"], "title": f"{h['base']} 夜盘复盘", "data": h}
+            return {"topic": "hot_symbol", "symbol": h["base"], "title": f"{h['base']} 夜盘复盘", "data": enrich_spot_pick(h)}
         snap = market_snapshot("ETHUSDT")
         return {"topic": "eth_night", "symbol": "ETH", "title": "ETH 夜盘观察", "data": snap}
 
@@ -524,16 +682,32 @@ def render_data(item: dict) -> str:
         ])
         return "\n".join(lines)
     if "current" in d:
-        return "\n".join([
+        # 完整技术分析数据
+        lines = [
             f"币种：${item['symbol']}",
-            f"当前价：{_fmt_price(d['current'])}",
-            f"24h涨跌：{_fmt_pct(d['change24'])}",
-            f"24h高点：{_fmt_price(d['high24'])}",
-            f"24h低点：{_fmt_price(d['low24'])}",
-            f"48h高点：{_fmt_price(d['high48'])}",
-            f"48h低点：{_fmt_price(d['low48'])}",
-            f"短线趋势：{d['trend']}",
-            f"24h成交额：{d['quoteVolume']/1e8:.2f}亿USDT",
+            f"当前价：{_fmt_price(d['current'])}（{_fmt_pct(d['change24'])}）",
+            f"24h区间：{_fmt_price(d['high24'])} ~ {_fmt_price(d['low24'])} | 成交{d['quoteVolume']/1e8:.2f}亿USDT",
+            f"【均线】MA5={_fmt_price(d.get('ma5',0))} MA20={_fmt_price(d.get('ma20',0))}",
+            f"【RSI(14)】{d.get('rsi14','?')} — {d.get('rsi_desc','')}",
+            f"【MACD】{d.get('macd_signal','')} | DIF={d.get('macd_dif','?')}",
+            f"【布林带】{d.get('bb_position','')} | 带宽{d.get('bb_width','?')}%",
+            f"【成交量】{d.get('vol_desc','')}（20日均量倍数:{d.get('vol_ratio','?')}x）",
+            f"【支撑/阻力】支撑{d.get('support','?')} | 阻力{d.get('resistance','?')}",
+            f"【综合判断】{d.get('verdict','?')}（多{d.get('bullish_count','?')}:空{d.get('bearish_count','?')}）",
+        ]
+        return "\n".join(lines)
+    # spot_24h 小币 + 技术指标富化
+    if "rsi14" in d:
+        return "\n".join([
+            f"币种：${d['base']}",
+            f"当前价：{_fmt_price(d['lastPrice'])}（{_fmt_pct(d['priceChangePercent'])}）",
+            f"24h区间：{_fmt_price(d['highPrice'])} ~ {_fmt_price(d['lowPrice'])} | 成交{d['quoteVolume']/1e8:.2f}亿USDT",
+            f"【RSI(14)】{d.get('rsi14','?')} — {d.get('rsi_desc','')}",
+            f"【MACD】{d.get('macd_signal','')} | DIF={d.get('macd_dif','?')}",
+            f"【均线】MA5={_fmt_price(d.get('ma5',0))} MA20={_fmt_price(d.get('ma20',0))}",
+            f"【成交量】{d.get('vol_desc','')}（均量{d.get('vol_ratio','?')}x）",
+            f"【支撑/阻力】{d.get('support','?')}/{d.get('resistance','?')}",
+            f"【综合】{d.get('verdict','?')}",
         ])
     return "\n".join([
         f"币种：${d['base']}",
@@ -748,6 +922,18 @@ _ENDING_RULES = """
   行动型："我先挂着，睡了。"
   问题型（唯一允许的）："你们呢？"（只许这三个字，不许加"你怎么看/你怎么操作"）
 - 结尾不准超过10个字。短才像人。"""
+
+# 技术指标分析要求（仅行情帖，哲思/故事/心理/争议不适用）
+_TA_REQUIREMENT = """
+【技术分析要求——必须做到】
+- 你必须给出看涨或看跌的判断理由。不要只说"多空博弈"，要说清楚哪个方向信号更多、依据是什么。
+- 必须结合至少3个技术指标：RSI（超买/超卖）、MACD（金叉/死叉/多空排列）、均线（MA5与MA20的关系、价格在均线上方还是下方）、布林带（价格在哪个位置）、成交量（放量/缩量/正常）。
+- 如果RSI低于30或高于70，必须在正文中明确指出超卖或超买信号。
+- 如果成交量明显放大（均量1.5倍以上），必须分析是放量上涨还是放量下跌，并给出含义。
+- 必须提到一个关键支撑位和一个关键阻力位，并说明为什么重要。
+- 指标之间有冲突的时候（比如RSI看跌但MACD看涨），优先说成交量+价格联动。
+- 不要简单说"多看少动"、"等方向"，要说等什么信号出现才能确认方向。
+- 数据融进句子，不要列清单。不是念数据，是用数据支撑判断。"""
 
 
 def make_square_post(slot: str, item: dict) -> str:
@@ -1102,6 +1288,9 @@ def make_square_post(slot: str, item: dict) -> str:
     prompt += _TIME_CONTEXT
     prompt += _DEEPSEEK_STYLE
     prompt += _ENDING_RULES
+    # 技术分析要求仅对行情帖生效（投资哲学/故事/心理/争议 不适用）
+    if not slot.startswith("philo_") and not cm:
+        prompt += _TA_REQUIREMENT
     content = _clean_content(ai_chat(prompt, model=MODEL_FAST, max_tokens=1200))
     if len(content) < 30:
         print(f"AI生成内容过短 len={len(content)}，使用兜底模板")
