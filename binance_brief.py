@@ -261,11 +261,16 @@ def tech_analysis(symbol: str) -> dict:
     vol_ratio = _volume_ratio(volumes, 20)
     vol_desc = "放量" if vol_ratio > 1.5 else ("缩量" if vol_ratio < 0.6 else "正常")
 
-    # 支撑/阻力
-    recent_highs = sorted(highs[-48:], reverse=True)[:3]  # 最近48h的前3高点
-    recent_lows = sorted(lows[-48:])[:3]  # 最近48h的前3低点
-    resistance = sum(recent_highs) / len(recent_highs) if recent_highs else current
-    support = sum(recent_lows) / len(recent_lows) if recent_lows else current
+    # 支撑/阻力（四级）
+    h48 = sorted(highs[-48:], reverse=True)
+    l48 = sorted(lows[-48:])
+    # R1=最近48h最高点（强阻力），R2=最近72h最高点（更强阻力）
+    h72 = sorted(highs[-72:], reverse=True) if len(highs) >= 72 else h48
+    l72 = sorted(lows[-72:]) if len(lows) >= 72 else l48
+    R1 = h48[0] if h48 else current * 1.02
+    R2 = h72[0] if len(h72) >= 2 and h72[0] < h72[1] else (h48[1] if len(h48) >= 2 else current * 1.04)
+    S1 = l48[0] if l48 else current * 0.98
+    S2 = l72[0] if len(l72) >= 2 and l72[0] > l72[1] else (l48[1] if len(l48) >= 2 else current * 0.96)
 
     # 综合多空判断
     bullish = 0
@@ -323,9 +328,11 @@ def tech_analysis(symbol: str) -> dict:
         # 成交量
         "vol_ratio": round(vol_ratio, 1),
         "vol_desc": vol_desc,
-        # 支撑/阻力
-        "resistance": round(resistance, 2),
-        "support": round(support, 2),
+        # 支撑/阻力（四级）
+        "R1": round(R1, 2),
+        "R2": round(R2, 2),
+        "S1": round(S1, 2),
+        "S2": round(S2, 2),
         # 综合
         "verdict": verdict,
         "bullish_count": bullish,
@@ -354,8 +361,10 @@ def enrich_spot_pick(coin: dict) -> dict:
         coin["vol_desc"] = ta["vol_desc"]
         coin["ma5"] = ta["ma5"]
         coin["ma20"] = ta["ma20"]
-        coin["support"] = ta["support"]
-        coin["resistance"] = ta["resistance"]
+        coin["S1"] = ta["S1"]
+        coin["S2"] = ta["S2"]
+        coin["R1"] = ta["R1"]
+        coin["R2"] = ta["R2"]
         coin["verdict"] = ta["verdict"]
         coin["bb_position"] = ta["bb_position"]
     except Exception as e:
@@ -692,7 +701,8 @@ def render_data(item: dict) -> str:
             f"【MACD】{d.get('macd_signal','')} | DIF={d.get('macd_dif','?')}",
             f"【布林带】{d.get('bb_position','')} | 带宽{d.get('bb_width','?')}%",
             f"【成交量】{d.get('vol_desc','')}（20日均量倍数:{d.get('vol_ratio','?')}x）",
-            f"【支撑/阻力】支撑{d.get('support','?')} | 阻力{d.get('resistance','?')}",
+            f"【支撑】S1={d.get('S1','?')} | S2={d.get('S2','?')}",
+            f"【阻力】R1={d.get('R1','?')} | R2={d.get('R2','?')}",
             f"【综合判断】{d.get('verdict','?')}（多{d.get('bullish_count','?')}:空{d.get('bearish_count','?')}）",
         ]
         return "\n".join(lines)
@@ -706,7 +716,8 @@ def render_data(item: dict) -> str:
             f"【MACD】{d.get('macd_signal','')} | DIF={d.get('macd_dif','?')}",
             f"【均线】MA5={_fmt_price(d.get('ma5',0))} MA20={_fmt_price(d.get('ma20',0))}",
             f"【成交量】{d.get('vol_desc','')}（均量{d.get('vol_ratio','?')}x）",
-            f"【支撑/阻力】{d.get('support','?')}/{d.get('resistance','?')}",
+            f"【支撑】S1={d.get('S1','?')} | S2={d.get('S2','?')}",
+            f"【阻力】R1={d.get('R1','?')} | R2={d.get('R2','?')}",
             f"【综合】{d.get('verdict','?')}",
         ])
     return "\n".join([
@@ -933,7 +944,26 @@ _TA_REQUIREMENT = """
 - 必须提到一个关键支撑位和一个关键阻力位，并说明为什么重要。
 - 指标之间有冲突的时候（比如RSI看跌但MACD看涨），优先说成交量+价格联动。
 - 不要简单说"多看少动"、"等方向"，要说等什么信号出现才能确认方向。
-- 数据融进句子，不要列清单。不是念数据，是用数据支撑判断。"""
+- 数据融进句子，不要列清单。不是念数据，是用数据支撑判断。
+
+【合约参考位——每条行情帖必须给出（仅供学习，不是喊单）】
+请在正文里自然融入以下合约参考位，语言要像老韭菜在分享自己的操作计划，不要写成交易信号：
+
+看多方向：
+  - 入场参考：根据支撑位附近给出一个合理的做多入场区间（比如"回踩 xxx 附近可以考虑轻仓多"）
+  - 止损参考：设在支撑位下方一些（比如"止损挂 xxx 下面，破了就走"）
+  - 止盈参考：设在阻力位附近或压力位前（比如"先看 xxx，过了再看 xxx"）
+
+看空方向：
+  - 入场参考：根据阻力位附近给出一个合理的做空入场区间（比如"反弹到 xxx 附近可以考虑轻仓空"）
+  - 止损参考：设在阻力位上方一些（比如"止损挂 xxx 上面，站稳了就走"）
+  - 止盈参考：设在支撑位上方一些（比如"先看 xxx，破了看 xxx"）
+
+融合要求：
+- 不要把多空方向写成"多军看这里、空军看这里"。要像在盘前计划自己的操作，比如"如果回踩到 xxx 位置，我会考虑轻仓试多，止损放 xxx 下面。如果破了 xxx，反弹到 xxx 附近我会看空"。
+- 每次只给一个方向的主推（根据当前综合判断选择偏多还是偏空），不必多空各写一套。
+- 文中必须出现一句免责提示，比如"以上只是个人计划，不是喊单"、"自己看着办"、"亏了别找我"这种自然的提醒。
+- 数据来自技术指标，不是猜的。入场/止损/止盈要跟前面提到的支撑/阻力/均线位置呼应上。"""
 
 
 def make_square_post(slot: str, item: dict) -> str:
