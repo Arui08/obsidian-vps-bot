@@ -51,6 +51,7 @@ SLOT_LABEL = {
     "late_noon": "热门盘点",
     "philo_afternoon": "投资哲学·日省",
     "evening": "ETH晚间",
+    "alt_evening": "晚盘涨幅榜",
     "night": "夜盘复盘",
     "recap": "全天复盘",
     "philo_night": "投资哲学·夜读",
@@ -60,7 +61,7 @@ SLOT_LABEL = {
     "latenight_philo": "投资哲学·夜思",
 }
 
-SLOT_ORDER = ["pre_market", "morning", "philo_morning", "mid_morning", "noon", "philo_noon", "afternoon", "late_noon", "philo_afternoon", "evening", "night", "recap", "philo_night", "latenight_btc", "latenight_eth", "latenight_alt", "latenight_philo"]
+SLOT_ORDER = ["pre_market", "morning", "philo_morning", "mid_morning", "noon", "philo_noon", "afternoon", "late_noon", "philo_afternoon", "evening", "alt_evening", "night", "recap", "philo_night", "latenight_btc", "latenight_eth", "latenight_alt", "latenight_philo"]
 
 
 # ---------------- 去重 ----------------
@@ -655,6 +656,15 @@ def build_item(slot: str) -> dict:
                     "title": f"深夜涨幅榜：{g['base']} +{g['priceChangePercent']:.1f}%", "data": g}
         snap = market_snapshot("ETHUSDT")
         return {"topic": "eth_latenight_backup", "symbol": "ETH", "title": "ETH 深夜走势", "data": snap}
+
+    if slot == "alt_evening":
+        g = pick_top_gainer()
+        if g:
+            g = enrich_spot_pick(g)
+            return {"topic": "alt_evening", "symbol": g["base"],
+                    "title": f"晚盘涨幅榜：{g['base']} +{g['priceChangePercent']:.1f}%", "data": g}
+        snap = market_snapshot("ETHUSDT")
+        return {"topic": "eth_evening_backup", "symbol": "ETH", "title": "ETH 晚间走势", "data": snap}
 
     raise ValueError(f"未知 slot: {slot}")
 
@@ -1331,6 +1341,28 @@ def make_square_post(slot: str, item: dict) -> str:
 6.不能写"必涨、稳赚、梭哈"。
 7.结尾按结尾规则来。
 8.标签：#ETH #晚间行情 #币圈 #以太坊。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    elif slot == "alt_evening":
+        prompt = f"""你是币安广场上一个扫晚盘涨幅榜的行情号。风格：晚饭后刷一遍盘，看到什么说什么，不讲理论，就讲钱往哪走了。
+
+现在写一条晚盘涨幅榜帖。晚间是广场流量最高的时候，写得直接一点。
+
+铁律：
+1.只输出正文。
+2.开头钩子：晚盘扫盘的真实感受。比如"晚饭后扫一眼涨幅榜，今天最后两小时最猛的居然是$xxx"、"晚上八点的盘，比下午干净，没那么多噪音"。
+3.每句独立成行，句间空一行。200-350字。
+4.正文要有：晚盘哪个币涨得最猛、是真资金还是情绪盘、这个涨幅明天早上还能不能持续、晚间追进去的风险。
+5.技术指标+合约参考位必须给。
+6.不能喊单。
+7.结尾自然收。
+8.标签：晚盘涨幅榜 {item['symbol']} 币圈 晚间行情。
 9.零emoji，纯文本。
 
 主题：{item['title']}
