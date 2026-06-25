@@ -54,9 +54,13 @@ SLOT_LABEL = {
     "night": "夜盘复盘",
     "recap": "全天复盘",
     "philo_night": "投资哲学·夜读",
+    "latenight_btc": "BTC深夜行情",
+    "latenight_eth": "ETH深夜走势",
+    "latenight_alt": "山寨深夜涨幅榜",
+    "latenight_philo": "投资哲学·夜思",
 }
 
-SLOT_ORDER = ["pre_market", "morning", "philo_morning", "mid_morning", "noon", "philo_noon", "afternoon", "late_noon", "philo_afternoon", "evening", "night", "recap", "philo_night"]
+SLOT_ORDER = ["pre_market", "morning", "philo_morning", "mid_morning", "noon", "philo_noon", "afternoon", "late_noon", "philo_afternoon", "evening", "night", "recap", "philo_night", "latenight_btc", "latenight_eth", "latenight_alt", "latenight_philo"]
 
 
 # ---------------- 去重 ----------------
@@ -622,17 +626,35 @@ def build_item(slot: str) -> dict:
                 "data": {"btc": btc, "eth": eth, "top": top}}
 
     # ---- 投资哲学帖（4条，不涉及行情，去重靠日期+时段+角度的稳定分配）----
-    if slot.startswith("philo_"):
-        vibe = slot.split("_", 1)[1]
+    if slot.startswith("philo_") or slot == "latenight_philo":
+        vibe = slot.split("_", 1)[1] if slot.startswith("philo_") else "latenight"
         angle = _philo_angle(slot)
         coin = _pick_philo_coin()
         sym = coin["base"] if coin else "BTC"
         return {
             "topic": f"philosophy_{vibe}",
             "symbol": sym,
-            "title": f"投资哲学·{SLOT_LABEL[slot].split('·')[1]}",
+            "title": f"投资哲学·{SLOT_LABEL[slot].split('·')[1] if '·' in SLOT_LABEL[slot] else SLOT_LABEL[slot]}",
             "data": {"vibe": vibe, "angle": angle, "coin": coin} if coin else {"vibe": vibe, "angle": angle},
         }
+
+    # ---- 凌晨 4 条（00:00-05:30）----
+    if slot == "latenight_btc":
+        snap = market_snapshot("BTCUSDT")
+        return {"topic": "btc_latenight", "symbol": "BTC", "title": "BTC 深夜行情", "data": snap}
+
+    if slot == "latenight_eth":
+        snap = market_snapshot("ETHUSDT")
+        return {"topic": "eth_latenight", "symbol": "ETH", "title": "ETH 深夜走势", "data": snap}
+
+    if slot == "latenight_alt":
+        g = pick_top_gainer()
+        if g:
+            g = enrich_spot_pick(g)
+            return {"topic": "alt_latenight", "symbol": g["base"],
+                    "title": f"深夜涨幅榜：{g['base']} +{g['priceChangePercent']:.1f}%", "data": g}
+        snap = market_snapshot("ETHUSDT")
+        return {"topic": "eth_latenight_backup", "symbol": "ETH", "title": "ETH 深夜走势", "data": snap}
 
     raise ValueError(f"未知 slot: {slot}")
 
@@ -977,7 +999,7 @@ def make_square_post(slot: str, item: dict) -> str:
     _TIME_CONTEXT = f"\n【当前北京时间：{today_cn}。如果内容涉及\"今天\"\"明天\"\"周末\"\"下周\"等时间表述，必须以此为准。今天是{weekday_map[now.weekday()]}不是周末。】"
 
     # ---- 投资哲学帖（4条，不分析行情，去重靠角度池稳定分配）----
-    if slot.startswith("philo_"):
+    if slot.startswith("philo_") or slot == "latenight_philo":
         pdata = item["data"]
         a = pdata.get("angle", {})
         source = a.get("source", "经典")
@@ -1093,9 +1115,76 @@ def make_square_post(slot: str, item: dict) -> str:
     if cm:
         # content_mode 已处理，直接跳到生成
         pass
-    elif slot.startswith("philo_"):
+    elif slot.startswith("philo_") or slot == "latenight_philo":
         # 投资哲学帖已在上面生成 prompt，跳过
         pass
+    # ---- 凌晨行情帖（00:00-05:30）----
+    elif slot == "latenight_btc":
+        prompt = f"""你是币安广场上一个深夜盯盘的老韭菜。风格：夜深人静的时候复盘最清醒，说的话比白天更直接。
+
+现在写一条BTC深夜行情帖。凌晨流动性薄，波动容易被放大，把这点说清楚。
+
+铁律：
+1.只输出正文。
+2.开头钩子：深夜盘面的真实感受。比如"凌晨两点的盘，比白天诚实"、"夜深了，BTC还在xxx晃，这个点还在盯的人不多了"。
+3.每句独立成行，句间空一行。200-350字。
+4.正文要有：BTC现在的关键位置、凌晨可能出现的极端波动（插针/画门）、如果插针怎么应对、凌晨下单要注意流动性。
+5.技术指标+合约参考位必须给（已在数据中）。
+6.不能喊单。
+7.结尾自然收。
+8.标签：#BTC #凌晨行情 #币圈 #夜盘。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    elif slot == "latenight_eth":
+        prompt = f"""你是币安广场上一个深夜盯盘的老韭菜。凌晨看盘视角跟白天不一样——流动性低、波动容易被放大。
+
+现在写一条ETH深夜走势帖。
+
+铁律：
+1.只输出正文。
+2.开头钩子：凌晨看ETH的真实感受。比如"ETH这个点还在跟大饼，没独立走"、"凌晨的ETH，能稳住xxx就不错了"。
+3.每句独立成行，句间空一行。200-350字。
+4.正文要有：ETH现在跟大饼的联动关系、凌晨支撑和压力在哪、如果大饼半夜突然动ETH怎么跟、凌晨挂单要注意什么。
+5.技术指标+合约参考位必须给。
+6.不能喊单。
+7.结尾自然收。
+8.标签：#ETH #凌晨行情 #币圈 #以太坊。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
+    elif slot == "latenight_alt":
+        prompt = f"""你是币安广场上一个深夜扫盘的行情号。凌晨看山寨比白天更冷静——没情绪、没FOMO，纯看数据。
+
+现在写一条深夜山寨涨幅榜帖。
+
+铁律：
+1.只输出正文。
+2.开头钩子：凌晨扫盘的真实感觉。比如"半夜扫一眼涨幅榜，今天偷偷涨的是$xxx"、"凌晨山寨的涨幅榜比白天干净，没那么多情绪盘"。
+3.每句独立成行，句间空一行。200-350字。
+4.正文要有：凌晨哪个山寨在涨、是真资金还是存量博弈、凌晨流动性低意味着什么（容易暴涨暴跌）、这个涨幅明天早上还能不能持续。
+5.技术指标+合约参考位必须给。
+6.不能喊单。
+7.结尾自然收。
+8.标签：午夜涨幅榜 {item['symbol']} 币圈 凌晨行情。
+9.零emoji，纯文本。
+
+主题：{item['title']}
+数据：
+{data_text}
+
+直接输出正文。"""
+
     elif slot == "pre_market":
         prompt = f"""你是一个混币安广场的行情观察号，说话风格像一个盯了几年盘的老韭菜。不装神，不喊单，但敢说自己的判断。
 
@@ -1319,7 +1408,7 @@ def make_square_post(slot: str, item: dict) -> str:
     prompt += _DEEPSEEK_STYLE
     prompt += _ENDING_RULES
     # 技术分析要求仅对行情帖生效（投资哲学/故事/心理/争议 不适用）
-    if not slot.startswith("philo_") and not cm:
+    if not slot.startswith("philo_") and slot != "latenight_philo" and not cm:
         prompt += _TA_REQUIREMENT
     content = _clean_content(ai_chat(prompt, model=MODEL_FAST, max_tokens=1200))
     if len(content) < 30:
